@@ -657,6 +657,23 @@ def _delivered_toward(data: dict, cell_power: float, *, is_charge: bool) -> floa
     return max(0.0, delivered)
 
 
+def _charge_hysteresis_latch_is_stale(coordinator) -> bool:
+    """Whether max_soc was raised above the ceiling the hysteresis latched under.
+
+    Such a latch captured a lower, since-raised ceiling (e.g. Target SOC bumped
+    back up after a temporary reduction) and must not hold the battery below the
+    new target. A latch set below the ceiling by a BMS cutoff or the top-cell
+    voltage is not stale: it holds until SOC falls through the hysteresis band,
+    like a latch at the ceiling. A latch without a recorded ceiling is judged
+    against its base SOC.
+    """
+    base = coordinator._hysteresis_base_soc
+    if base is None:
+        return False
+    latched_under = getattr(coordinator, "_hysteresis_latch_max_soc", None)
+    return coordinator.max_soc > (base if latched_under is None else latched_under)
+
+
 class ChargeDischargeController:
     """Controller to manage charge/discharge logic for all batteries."""
 
@@ -3831,15 +3848,9 @@ class ChargeDischargeController:
                     _vmax = control_vmax(coordinator)
                     if _vmax is not None:
                         taper_at_top_voltage = _vmax >= NORMAL_BALANCE_PAUSE_CELL_VOLTAGE
-                # If the configured ceiling was raised above the latched base SOC,
-                # the latch is stale: it captured a lower, since-raised ceiling
-                # (e.g. Target SOC bumped back up after a temporary reduction).
-                # Clear it so charge can resume toward the new target; a genuine
-                # top-of-charge re-arms immediately below.
-                if (
-                    coordinator._hysteresis_base_soc is not None
-                    and coordinator.max_soc > coordinator._hysteresis_base_soc
-                ):
+                # Clear a stale latch so charge can resume toward the raised
+                # target; a genuine top-of-charge re-arms immediately below.
+                if _charge_hysteresis_latch_is_stale(coordinator):
                     coordinator._hysteresis_active = False
                     coordinator._hysteresis_base_soc = None
 
@@ -3849,6 +3860,7 @@ class ChargeDischargeController:
                         # Base stays the aggregate: it answers "how far must the
                         # whole battery fall before recharging", not "is it full".
                         coordinator._hysteresis_base_soc = current_soc
+                        coordinator._hysteresis_latch_max_soc = coordinator.max_soc
 
                 hysteresis_base = (
                     coordinator._hysteresis_base_soc
@@ -4361,14 +4373,9 @@ class ChargeDischargeController:
                         _taper_at_top = False
                         if effective_max_soc >= 100 and _vmax_hysteresis is not None:
                             _taper_at_top = _vmax_hysteresis >= NORMAL_BALANCE_PAUSE_CELL_VOLTAGE
-                        # If the configured ceiling was raised above the latched
-                        # base SOC, the latch is stale (Target SOC bumped back up
-                        # after a temporary reduction). Clear it so charge resumes
-                        # toward the new target; a genuine top re-arms below.
-                        if (
-                            coordinator._hysteresis_base_soc is not None
-                            and coordinator.max_soc > coordinator._hysteresis_base_soc
-                        ):
+                        # Clear a stale latch so charge resumes toward the
+                        # raised target; a genuine top re-arms below.
+                        if _charge_hysteresis_latch_is_stale(coordinator):
                             coordinator._hysteresis_active = False
                             coordinator._hysteresis_base_soc = None
 
@@ -4377,6 +4384,7 @@ class ChargeDischargeController:
                             # Capture the actual SOC that triggered hysteresis (may be 100% after full charge)
                             if coordinator._hysteresis_base_soc is None:
                                 coordinator._hysteresis_base_soc = current_soc
+                                coordinator._hysteresis_latch_max_soc = coordinator.max_soc
 
                         # Use actual peak SOC as threshold base (handles post-full-charge case)
                         hysteresis_base = coordinator._hysteresis_base_soc if coordinator._hysteresis_base_soc else coordinator.max_soc
@@ -4422,6 +4430,7 @@ class ChargeDischargeController:
                         coordinator._hysteresis_active = True
                         if coordinator._hysteresis_base_soc is None:
                             coordinator._hysteresis_base_soc = current_soc
+                            coordinator._hysteresis_latch_max_soc = coordinator.max_soc
                         _LOGGER.debug(
                             "%s: BMS cutoff at %d%% — activating hysteresis",
                             coordinator.name, current_soc,

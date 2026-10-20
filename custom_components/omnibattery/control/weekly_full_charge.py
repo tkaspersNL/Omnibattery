@@ -846,6 +846,7 @@ class WeeklyFullChargeManager:
                 coordinator._hysteresis_active = True
                 current_soc = coordinator.data.get("battery_soc", 100) if coordinator.data else 100
                 coordinator._hysteresis_base_soc = current_soc
+                coordinator._hysteresis_latch_max_soc = coordinator.max_soc
                 _LOGGER.debug(
                     "%s: Re-enabled hysteresis after weekly full charge (base SOC: %.1f%%)",
                     coordinator.name,
