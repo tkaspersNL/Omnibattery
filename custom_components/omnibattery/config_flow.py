@@ -1470,6 +1470,14 @@ class MarstekVenusConfigFlow(LegacyDomainMigrationMixin, ConfigFlow, domain=DOMA
         elif brand == "anker":
             _LOGGER.info("Probing Anker Solarbank at %s:%s slave %s", host, port, slave_id)
             result, _ = await AnkerModbusDriver.probe(host, port, slave_id)
+        elif brand == "indevolt":
+            _LOGGER.info("Probing Indevolt device at %s:%s", host, port)
+            try:
+                result = await IndevoltDriver.probe(host, port) is not None
+            except (IndevoltAuthenticationError, ValueError):
+                # A local API set to HTTP Digest, or a reply that is not an
+                # Indevolt's, does not count as this battery answering.
+                result = False
         elif serial_port:
             _LOGGER.info("Probing Marstek %s over serial %s slave %s", version, serial_port, slave_id)
             if version == "vD":
