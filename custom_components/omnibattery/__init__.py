@@ -234,6 +234,7 @@ from .const import (
     MISSING_SENSOR_ISSUE_DELAY_S,
     HOT_PATH_READBACK_MAX_LATENCY_S,
     DISCHARGE_ENGAGE_GRACE_S,
+    ENGAGE_GRACE_STEP_FACTOR,
     HIGH_SOC_CHARGE_TAPER_FLOOR,
     HIGH_SOC_CHARGE_TAPER_GRACE_S,
     IDLE_RUNAWAY_POWER_W,
@@ -6911,6 +6912,42 @@ class ChargeDischargeController:
             self._discharge_engage_started[coordinator] = dt_util.utcnow()
             self._non_responsive.clear(coordinator, delivering=False)
             coordinator._low_soc_refusal_started = None
+        # A large step up within the same direction restarts only its engage
+        # clock: the battery was following the smaller command and needs time to
+        # ramp. The non-responsive episode, the taper clock and the low-SOC
+        # refusal clock carry on, so a stall that outlasts the grace still counts.
+        if (
+            not preserve_non_responsive_episode
+            and net_sign != 0
+            and self._last_commanded_net_sign.get(coordinator) == net_sign
+        ):
+            is_charge = net_sign == 1
+            previous_command = getattr(
+                coordinator,
+                "commanded_charge_power" if is_charge else "commanded_discharge_power",
+                0,
+            ) or 0
+            previous_power = (coordinator.data or {}).get("battery_power")
+            if (
+                previous_command > 0
+                and abs(net_power) >= ENGAGE_GRACE_STEP_FACTOR * previous_command
+                and previous_power is not None
+                and _delivered_toward(
+                    coordinator.data, float(previous_power), is_charge=is_charge
+                ) >= 0.10 * previous_command
+            ):
+                engage_times = (
+                    self._charge_engage_started
+                    if is_charge
+                    else self._discharge_engage_started
+                )
+                engage_times[coordinator] = dt_util.utcnow()
+                _LOGGER.debug(
+                    "[%s] %s command stepped up %dW -> %dW — restarting the "
+                    "engage grace",
+                    coordinator.name, "Charge" if is_charge else "Discharge",
+                    previous_command, abs(net_power),
+                )
         # Mirror stamp for the opposite transition: a flip from a move into idle
         # starts the ramp-down grace for the idle-runaway judgment below. A
         # battery idle from the start (no prior commanded move) gets no grace —
@@ -7272,9 +7309,10 @@ class ChargeDischargeController:
         if within_engage_grace:
             # A slow inverter (Zendure HTTP) takes seconds to reverse into
             # discharge from charge/idle — up to ~20-30 s on a cold
-            # charge→discharge transition. 0 W out this soon after the
-            # direction flip is engage latency, not a fault; give it time
-            # before judging. The flip already reset the tracker.
+            # charge→discharge transition — or to ramp after a large step up.
+            # 0 W out this soon after the direction flip or step is engage
+            # latency, not a fault; give it time before judging. A flip
+            # already reset the tracker; a step leaves its count in place.
             _LOGGER.debug(
                 "[%s] No %s delivered yet but within %ds engage "
                 "grace — inverter still engaging, not a fault",
