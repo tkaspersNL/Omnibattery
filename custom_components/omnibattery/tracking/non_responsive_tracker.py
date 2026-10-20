@@ -215,9 +215,16 @@ class NonResponsiveTracker:
             info["retry_attempted"] = False
             info["wake_attempted"] = False
             info["wake_used"] = False
-            if was_excluded:
+            # delivering=True also comes from the full-battery, taper and
+            # low-SOC exemptions, so neither line claims power is flowing.
+            if was_excluded and delivering:
                 _LOGGER.info(
-                    "[%s] Battery is delivering power again - returned to pool",
+                    "[%s] No longer non-responsive - returned to pool",
+                    coordinator.name,
+                )
+            elif was_excluded:
+                _LOGGER.info(
+                    "[%s] Commanded direction changed - retrying battery",
                     coordinator.name,
                 )
 
