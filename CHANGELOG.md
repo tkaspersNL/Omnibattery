@@ -6,6 +6,10 @@
 
 - **Indevolt SolidFlex / PowerFlex support** (#491): a driver for Indevolt batteries over the battery's local HTTP API: SolidFlex 2000 (tested), PowerFlex 2000, SolidFlex/PowerFlex 3000 and SolidFlex 1200 (same API). Omnibattery controls the battery in its Realtime mode only and never changes the working mode. The reserve and the two power limits stay in sync with the Indevolt app and are written to the battery only when you change them. A per-battery request speed (Conservative 5s by default, Normal 3s, Fast 2s, Maximum 1s) sets how often Omnibattery talks to the battery, and it slows down by itself when the battery answers slowly. Near full, Omnibattery charges the battery with what its BMS takes while it tapers the charge, so it charges on to 100%. See [Indevolt SolidFlex / PowerFlex](site-docs/configuration/batteries/indevolt.md).
 
+### Fixed
+
+- **Dynamic Pricing: running slot stuck after a re-plan that selects nothing** (#642): a re-plan that found no slots cleared the schedule but left the running slot active, so the battery stayed in `grid_charging` at full SOC and never discharged until predictive charging was switched off. The slot is now released in the same cycle and normal PD control takes over. Thanks to @syphernl.
+
 ## [1.5.1b2] - 2026-10-13
 
 ### Fixed
