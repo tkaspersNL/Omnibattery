@@ -4,14 +4,14 @@ Omnibattery controla una batería Indevolt a través de la API HTTP local de la 
 
 ## ¿Lo necesito?
 
-**Úsalo si** tienes una batería Indevolt SolidFlex o PowerFlex y Home Assistant puede alcanzarla en tu red local. La SolidFlex 2000 está probada. La PowerFlex 2000, las SolidFlex y PowerFlex 3000 y la SolidFlex 1200 usan la misma API; si usas una de ellas, indica tu modelo y firmware.
+**Úsalo si** tienes una batería Indevolt SolidFlex o PowerFlex y Home Assistant puede alcanzarla en tu red local. La SolidFlex 2000 y la SolidFlex 3000 AC están probadas. La PowerFlex 2000, la PowerFlex 3000 y la SolidFlex 1200 usan la misma API; si usas una de ellas, indica tu modelo y firmware. Una SolidFlex 3000 informa el mismo tipo de dispositivo que una SolidFlex 2000 (`CMS-SF2000`), así que Omnibattery la muestra con el nombre de modelo SolidFlex 2000; el control funciona igual.
 
 **Usa Omnibattery en lugar de la integración oficial de Indevolt.** Ambas consultan la misma batería, y la batería atiende las peticiones de una en una. Omnibattery muestra las mismas medidas, incluidos los contadores de energía AC para el panel de Energía, así que desactiva o elimina la integración oficial para una batería que controle Omnibattery (consulta [Pasar desde la integración oficial de Indevolt](#pasar-desde-la-integracion-oficial-de-indevolt)).
 
 ## Antes de empezar
 
 - En la app de Indevolt, activa la **API local** con el protocolo **HTTP** (no HTTP Digest) y da a la batería una dirección IP fija. Omnibattery no usa **Modbus TCP**, así que puedes dejarlo desactivado. En las pruebas, la batería respondió a las peticiones Modbus mucho más despacio que a las peticiones HTTP, y la conexión Modbus era menos estable y requería reconexiones frecuentes.
-- En la app de Indevolt, pon el modo de trabajo en **Tiempo real** (Realtime). Omnibattery solo controla la batería en modo Tiempo real y nunca cambia el modo por sí mismo (ver [por qué](#por-que-omnibattery-solo-escribe-ajustes-cuando-los-cambias)).
+- En la app de Indevolt, pon el modo de trabajo en **Tiempo real** (Realtime (standby) en la app). Omnibattery solo controla la batería en modo Tiempo real y nunca cambia el modo por sí mismo (ver [por qué](#por-que-omnibattery-solo-escribe-ajustes-cuando-los-cambias)).
 - La **reserva** de la batería (SOC de respaldo), la **entrada AC máxima** y la **salida AC máxima** son los mismos ajustes que el SOC mínimo, la potencia máxima de carga y la potencia máxima de descarga de Omnibattery. Omnibattery los mantiene sincronizados, así que puedes cambiarlos en cualquiera de los dos sitios.
 - Desactiva la integración oficial de Indevolt para esta batería.
 
@@ -19,7 +19,7 @@ Omnibattery controla una batería Indevolt a través de la API HTTP local de la 
 
 1. En el asistente de Omnibattery, elige **Indevolt SolidFlex / PowerFlex**.
 2. Introduce un **Nombre** descriptivo y la **dirección IP** de la batería.
-3. Deja el **Puerto HTTP** en `8080` y la **Velocidad de solicitudes** en **Conservadora (5s)** (consulta [Elegir la velocidad de solicitudes](#elegir-la-velocidad-de-solicitudes)).
+3. Deja el **Puerto HTTP** en `8080` y elige una **Velocidad de solicitudes**; **Conservadora (5s)** es la predeterminada (consulta [Elegir la velocidad de solicitudes](#elegir-la-velocidad-de-solicitudes)).
 4. Omnibattery lee la identidad, el modo de trabajo y los límites de potencia de la batería. No cambia nada en la batería.
 5. Si la batería no está en modo Tiempo real, un aviso lo indica. La configuración continúa; el control empieza cuando eliges Tiempo real en la app.
 6. Elige los límites comunes de potencia y estado de carga. El formulario se abre con la reserva y los límites de potencia de la propia batería, y los controles de potencia llegan hasta el máximo de hardware de la batería. La primera vez que arranca, Omnibattery adopta los ajustes de la batería sin escribir nada, así que cámbialos después, en la página del dispositivo o en la app de Indevolt. Para el seguimiento por MAC, la dirección MAC se rellena desde la batería.
@@ -111,7 +111,7 @@ Omnibattery aplica su propio SOC mínimo y máximo por software. Cada orden llev
 |---|---|---|
 | El asistente no conecta | La API local está desactivada, o la dirección o el puerto no son correctos | Activa la API local en la app de Indevolt y revisa la dirección IP y el puerto `8080` |
 | El asistente dice que la batería pide una contraseña | La API local está en HTTP Digest | Elige **HTTP** para la API local en la app de Indevolt |
-| Control Status es `realtime_mode_required` | La batería está en otro modo de trabajo | Elige **Tiempo real** en la app de Indevolt; el control se reanuda solo |
+| Control Status es `realtime_mode_required` | La batería está en otro modo de trabajo | Elige **Tiempo real** (Realtime (standby)) en la app de Indevolt; el control se reanuda solo |
 | Una notificación dice que la batería va lenta, o Request Interval (Effective) se mantiene por encima de la velocidad elegida | Otro cliente también la consulta, o la señal Wi-Fi es débil | Desactiva la integración oficial de Indevolt para esta batería, revisa la señal o elige la velocidad de solicitudes **Conservadora (5s)** |
 | Una notificación dice que un ajuste no se aplicó | La batería no aceptó el valor | La batería conserva su valor; inténtalo más tarde o cámbialo en la app de Indevolt |
 | Reparaciones dice que la escritura de ajustes de Indevolt está en pausa | 100 escrituras de la reserva y los límites de potencia en un año, casi siempre por una automatización o un script | Revisa las automatizaciones y scripts que fijan estos valores y vuelve a permitir la escritura en **Ajustes → Reparaciones** (también si los cambios eran intencionados) |
