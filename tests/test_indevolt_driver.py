@@ -18,6 +18,7 @@ from custom_components.omnibattery.drivers.indevolt import (
     ControlState,
     IndevoltDriver,
     firmware_below,
+    model_label_for,
 )
 from custom_components.omnibattery.infra.indevolt_client import REQUEST_SPEED_SLOT_S, SLOT_S, pacing_levels
 from tests.indevolt_fake import (
@@ -249,6 +250,40 @@ async def test_unknown_model_is_monitored_but_never_controlled():
     assert not (await driver.apply_setpoint(500)).ok
     assert device.set_data_requests == []
     await driver.close()
+
+
+async def test_a_confirmed_model_code_gets_its_product_name():
+    clock = VirtualClock()
+    driver = await connected_driver(clock, FakeIndevoltDevice(clock), own=False)
+    assert driver.model_label == "SolidFlex 2000"
+    await driver.close()
+
+
+async def test_another_model_code_is_shown_as_reported_and_the_type_still_decides_control():
+    # A SolidFlex 3000 AC reports the type of a SolidFlex 2000.
+    clock = VirtualClock()
+    device = FakeIndevoltDevice(clock, device_type="CMS-SF2000", model_code="YZ-E3000")
+    driver = await connected_driver(clock, device)
+    assert driver.model_label == "YZ-E3000"
+    assert driver.control_state is ControlState.OWNED
+    await driver.close()
+
+
+async def test_firmware_without_a_model_code_is_named_by_the_device_type():
+    clock = VirtualClock()
+    device = FakeIndevoltDevice(clock, model_code=None)
+    driver = await connected_driver(clock, device, own=False)
+    await _hold(clock, driver, 60)
+    assert driver.model_label == "SolidFlex 2000"
+    assert 1 in driver.scheduler.stats()["unsupported_points"]
+    await driver.close()
+
+
+def test_the_model_name_falls_back_to_the_device_type():
+    assert model_label_for("CMS-SP2000", None) == "PowerFlex 2000"
+    assert model_label_for("CMS-XY9000", "") == "CMS-XY9000"
+    assert model_label_for("CMS-SP2000", " YZ-X2000 ") == "YZ-X2000"
+    assert model_label_for(None, None) is None
 
 
 async def test_control_can_be_disabled_for_monitoring_only():
