@@ -98,6 +98,7 @@ P_RT_POWER = 6109
 P_NATIVE_MIN_SOC = 6105  # the reserve; written via 1142 (see indevolt_settings)
 P_HW_MAX_CHARGE = 114  # hardware ceilings; did not move when the settings changed
 P_HW_MAX_DISCHARGE = 115
+P_MODEL_CODE = 1  # the model code, e.g. "YZ-E3000" (see MODEL_CODE_LABELS)
 
 P_OPERATING_STATUS = 11006  # what the device is doing (see _OPERATING_STATUS)
 # The device's own forced full charge, set in the Indevolt app (read only here):
@@ -175,10 +176,12 @@ BATTERY_DETAIL_FIELDS = (
     ("current", "Current", "A", "current", "measurement", 2, -1000, 1000),
 )
 
+# The model code goes first, so it is in the first read, before Home Assistant
+# registers the device and its model name.
 LIMITS_TIER = Tier(
     "limits",
-    (11009, 11011, P_FEED_IN_LIMIT, 11032, 114, 115, P_GRID_CHARGING, P_NATIVE_MIN_SOC,
-     P_DEVICE_MODE, 142, P_FULL_CHARGE_INTERVAL, P_FULL_CHARGE_START,
+    (P_MODEL_CODE, 11009, 11011, P_FEED_IN_LIMIT, 11032, 114, 115, P_GRID_CHARGING,
+     P_NATIVE_MIN_SOC, P_DEVICE_MODE, 142, P_FULL_CHARGE_INTERVAL, P_FULL_CHARGE_START,
      *(serial for serial, _ in PACKS)),
     180.0,
 )
@@ -288,6 +291,24 @@ MODELS = {
     "CMS-SP3000": _Model("PowerFlex 3000", "V1409.08.3034"),
     "CMS-SF1200": _Model("SolidFlex 1200", "V1407.07.202E"),
 }
+
+# Indevolt identifies the model by its model code (GetData point 1); the device
+# type is an internal identifier (a SolidFlex 3000 AC reports CMS-SF2000). A
+# code confirmed on a device of that model and type gets its product name; any
+# other code is shown as the device reports it, until its name is known.
+# Control and the firmware check still go by the device type.
+MODEL_CODE_LABELS = {
+    ("CMS-SF2000", "YZ-E2000G2"): "SolidFlex 2000",
+}
+
+
+def model_label_for(device_type: str | None, model_code: object) -> str | None:
+    """The model name to show; firmware without a model code falls back to the type."""
+    if isinstance(model_code, str) and model_code.strip():
+        code = model_code.strip()
+        return MODEL_CODE_LABELS.get((device_type, code), code)
+    model = MODELS.get(device_type or "")
+    return model.label if model is not None else device_type
 
 _FW_PATTERN = re.compile(r"^V([0-9A-Fa-f]+)\.([0-9A-Fa-f]+)\.([0-9A-Fa-f]+)$")
 
@@ -578,6 +599,7 @@ class IndevoltDriver(BatteryDriver):
         self._shutting_down = False
         self._config: dict[str, Any] = {}
         self._model: _Model | None = None
+        self._model_code_logged: Any = None
         pace = pacing_levels(normal_slot(slot_s))[0]
         self._capabilities = DriverCapabilities(
             hardware_soc_cutoff=False,
@@ -649,9 +671,8 @@ class IndevoltDriver(BatteryDriver):
 
     @property
     def model_label(self) -> Optional[str]:
-        if self._model is not None:
-            return self._model.label
-        return self._config.get("type")
+        code = self._scheduler.value(P_MODEL_CODE) if self._scheduler is not None else None
+        return model_label_for(self._config.get("type"), code)
 
     @property
     def serial(self) -> Optional[str]:
@@ -872,7 +893,7 @@ class IndevoltDriver(BatteryDriver):
         model = MODELS.get(dtype)
         return {
             "type": dtype,
-            "model": model.label if model else dtype,
+            "model": model_label_for(dtype, data.get(str(P_MODEL_CODE))),
             "known_model": model is not None,
             "serial": str(device.get("sn", "")),
             "firmware": str(device.get("f_ver") or device.get("fw") or ""),
@@ -1249,7 +1270,17 @@ class IndevoltDriver(BatteryDriver):
             self._sync_pack_points()
         if P_OPERATING_STATUS in updated:
             self._log_operating_status()
+        if P_MODEL_CODE in updated:
+            self._log_model_code()
         self._evaluate(updated)
+
+    def _log_model_code(self) -> None:
+        assert self._scheduler is not None
+        code = self._scheduler.value(P_MODEL_CODE)
+        if code != self._model_code_logged:
+            self._model_code_logged = code
+            _LOGGER.info("[%s] Indevolt model code %s, shown as %s",
+                         self._name, code, self.model_label)
 
     def _log_operating_status(self) -> None:
         assert self._scheduler is not None
