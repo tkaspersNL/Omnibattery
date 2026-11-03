@@ -2,8 +2,9 @@
 
 A grid-charge slot has to clear the arbitrage margin: the energy it stores,
 after round-trip losses, must be worth more than the slot costs plus the
-margin. Guaranteed-floor energy is the exception: it ignores the margin, and
-only the user's own price cap limits it.
+margin. Guaranteed-floor energy and a pending weekly full charge are the
+exceptions: they ignore the margin, and only the user's own price cap limits
+them.
 
 The evening path runs the real chronological planner here, with a flat
 consumption profile and no solar left for the day.
@@ -188,6 +189,20 @@ def test_guaranteed_floor_energy_ignores_the_margin():
     assert _booked(_manager(prices=_prices())) == []
 
     booked = _booked(_manager(prices=_prices(), floor=30.0))
+
+    assert booked
+    assert all(price >= 0.45 for _hour, price in booked)
+
+
+def test_pending_weekly_full_charge_ignores_the_margin():
+    # On a weekly full charge day this pass is the last resort for reaching
+    # 100%, so the same prices still top the battery up.
+    booked = _booked(
+        _manager(
+            prices=_prices(),
+            _weekly_full_charge_gap_kwh=lambda _coordinators: 8.0,
+        )
+    )
 
     assert booked
     assert all(price >= 0.45 for _hour, price in booked)

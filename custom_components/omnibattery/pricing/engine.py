@@ -5063,15 +5063,21 @@ class PricingManager:
         decision_data["energy_deficit_kwh"] = evening_deficit_kwh
         decision_data["planned_grid_charge_kwh"] = planned_evening_charge_kwh
         # Same arbitrage-aware ceiling as the main evaluation: a deficit top-up
-        # must not buy energy that costs more than it can displace later.
-        price_ceiling, _ = calculations.effective_charge_ceiling(
-            slots,
-            hours_needed,
-            self._controller.max_price_threshold,
-            self._controller.min_arbitrage_margin,
-            self._controller.round_trip_efficiency,
-            now=now,
-        )
+        # must not buy energy that costs more than it can displace later. A
+        # pending weekly full charge is the exception: this pass is its last
+        # resort when no reserved slot cleared the ceiling, so like
+        # guaranteed-floor energy it is held to the user's cap only.
+        if weekly_gap_kwh > 0.0:
+            price_ceiling = self._controller.max_price_threshold
+        else:
+            price_ceiling, _ = calculations.effective_charge_ceiling(
+                slots,
+                hours_needed,
+                self._controller.max_price_threshold,
+                self._controller.min_arbitrage_margin,
+                self._controller.round_trip_efficiency,
+                now=now,
+            )
         chronological_plan = self._build_chronological_plan(
             now=now,
             slots=slots,
