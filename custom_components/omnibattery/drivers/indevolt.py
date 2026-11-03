@@ -538,7 +538,7 @@ class Notifier(Protocol):
     def setting_ok(self, key: str) -> None: ...
     def flash_writes_paused(self, allowance: int) -> None: ...
     def flash_writes_resumed(self) -> None: ...
-    def throttled(self, interval_s: float, *, suggest_slower: bool = False) -> None: ...
+    def throttled(self, interval_s: float, *, slower_speed: str | None = None) -> None: ...
     def throttle_cleared(self) -> None: ...
 
 
@@ -914,7 +914,7 @@ class IndevoltDriver(BatteryDriver):
         c = self._fresh_value
         bp = _num(c(P_BATTERY_POWER), -MAX_REALTIME_POWER_W * 2, MAX_REALTIME_POWER_W * 2)
         if bp is not None:
-            out["battery_power"] = -bp  # native + discharging; OmniBattery + charging
+            out["battery_power"] = -bp  # native + discharging; Omnibattery + charging
         total, bypass = _num(c(P_AC_TOTAL)), _num(c(P_BYPASS))
         if total is not None and bypass is not None:
             # The inverter's own AC contribution: 2278 minus what passes through
@@ -966,7 +966,7 @@ class IndevoltDriver(BatteryDriver):
         limits_age = self._tier_max_age(LIMITS_TIER)
         limits = {p: c(p, limits_age) for p in LIMITS_TIER.points}
         # The user settings. The coordinator adopts these as min SOC and the
-        # configured power ceilings; a value OmniBattery is writing is shown
+        # configured power ceilings; a value Omnibattery is writing is shown
         # until the device reports it back.
         for key in _SETTING_KEYS:
             value = self._settings.published(key)
@@ -1160,7 +1160,7 @@ class IndevoltDriver(BatteryDriver):
         self._evaluate()
         if self._state is not ControlState.OWNED or self._scheduler is None:
             if int(net_power_w) == 0:
-                # Nothing to stop: while not in control OmniBattery runs no
+                # Nothing to stop: while not in control Omnibattery runs no
                 # command on the battery, so idle is already true from its
                 # side. Nothing is sent. The core's manual-control handoff
                 # needs this to succeed.
@@ -1546,14 +1546,19 @@ class IndevoltDriver(BatteryDriver):
         if throttled and not self._throttle_notified:
             self._throttle_notified = True
             # Faster than Conservative the user chose the extra speed, so the text
-            # names the slower setting as the lasting fix.
+            # names the speed one step slower as the lasting fix.
             self._notifier.throttled(
-                self._scheduler.interval_s,
-                suggest_slower=self._slot_s < REQUEST_SPEED_SLOT_S["conservative"],
+                self._scheduler.interval_s, slower_speed=_slower_speed(self._slot_s),
             )
         elif not throttled and self._scheduler.backoff_level == 0 and self._throttle_notified:
             self._throttle_notified = False
             self._notifier.throttle_cleared()
+
+
+def _slower_speed(slot_s: float) -> str | None:
+    """The request speed one step slower than ``slot_s``; None at Conservative."""
+    slower = [(slot, speed) for speed, slot in REQUEST_SPEED_SLOT_S.items() if slot > slot_s]
+    return min(slower)[1] if slower else None
 
 
 def _step_down(power: float) -> int:

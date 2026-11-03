@@ -851,7 +851,7 @@ const K = {
   storedEnergy: "stored_energy", // kWh
   batteryTotalEnergy: "battery_total_energy", // capacity kWh
   inverterState: "inverter_state",
-  controlStatus: "control_status", // Indevolt: whether OmniBattery is steering it
+  controlStatus: "control_status", // Indevolt: whether Omnibattery is steering it
   dailyCharge: "total_daily_charging_energy",
   dailyDischarge: "total_daily_discharging_energy",
   maxChargePower: "max_charge_power",
@@ -6010,7 +6010,7 @@ class MarstekVenusPanel extends HTMLElement {
       r.state.style.display = "none";
     }
 
-    // control-status chip: only while OmniBattery is not steering the battery.
+    // control-status chip: only while Omnibattery is not steering the battery.
     // The inverter chip above still shows what the battery itself is doing
     // (in its own self-consumption mode it may well be discharging).
     const ctlState = this._sval(b.controlStatus);

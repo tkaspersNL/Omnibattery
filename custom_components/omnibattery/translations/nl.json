@@ -6,11 +6,11 @@
         "step": {
           "confirm": {
             "title": "Indevolt-instellingen weer laten schrijven",
-            "description": "OmniBattery heeft de minimale SOC en de vermogenslimieten van **{name}** het afgelopen jaar {allowance} keer geschreven en heeft het schrijven daarom gepauzeerd. Dit is een vangnet, geen beperking voor jou: het voorkomt dat een automatisering of script die deze instellingen te vaak wijzigt ongemerkt het flashgeheugen van de batterij verslijt; dat slijt een beetje bij elke schrijfactie. Wijzigingen in de Indevolt-app worden nog wel overgenomen.\n\nControleer je automatiseringen en scripts op iets dat deze instellingen vaak wijzigt. Bevestig daarna hier om het schrijven weer aan te zetten; er begint dan een nieuw tegoed van {allowance} schrijfacties. Waren de wijzigingen de bedoeling, bevestig dan gewoon."
+            "description": "Omnibattery heeft de minimale SOC en de vermogenslimieten van **{name}** het afgelopen jaar {allowance} keer geschreven en heeft het schrijven daarom gepauzeerd. Dit is een vangnet, geen beperking voor jou: het voorkomt dat een automatisering of script die deze instellingen te vaak wijzigt ongemerkt het flashgeheugen van de batterij verslijt; dat slijt een beetje bij elke schrijfactie. Wijzigingen in de Indevolt-app worden nog wel overgenomen.\n\nControleer je automatiseringen en scripts op iets dat deze instellingen vaak wijzigt. Bevestig daarna hier om het schrijven weer aan te zetten; er begint dan een nieuw tegoed van {allowance} schrijfacties. Waren de wijzigingen de bedoeling, bevestig dan gewoon."
           }
         },
         "abort": {
-          "battery_unavailable": "De batterij is nu niet geladen. Probeer het opnieuw zodra OmniBattery ermee verbonden is."
+          "battery_unavailable": "De batterij is nu niet geladen. Probeer het opnieuw zodra Omnibattery ermee verbonden is."
         }
       }
     },
@@ -622,12 +622,12 @@
       },
       "reconfigure_battery_indevolt_request_speed": {
         "title": "Batterij {battery_num} opnieuw configureren — Verzoeksnelheid (Indevolt)",
-        "description": "Met een hogere verzoeksnelheid reageert je batterij sneller op meterveranderingen, wat een betere nul-op-de-meter (NoM) kan opleveren. De opties:\n\n- **Conservatief** (5s) is het advies van Indevolt en de standaard. Het past bij een meter die elke 5s bijwerkt, het gebruikelijke tempo in Home Assistant: met zo'n meter reageert de batterij bij een hogere snelheid niet sneller.\n- **Normaal** (3s) past bij een meter die elke 3s bijwerkt.\n- **Snel** (2s) past bij een meter die elke 2s bijwerkt. Met een meter die elke seconde bijwerkt is het de veilige keuze: de batterij krijgt dan hooguit elke 2s een nieuwe opdracht.\n- **Maximaal** (1s) stuurt tot elke seconde een opdracht en wacht niet langer 1s tussen verzoeken, wat onder het gedocumenteerde minimum van Indevolt ligt. Het helpt alleen met een meter die elke seconde bijwerkt; kies bij een tragere meter **Snel**. Zet bij **Maximaal** ook PD Min. Cyclusinterval op 0 als elke batterij in OmniBattery een Indevolt is.",
+        "description": "Met een hogere verzoeksnelheid reageert je batterij sneller op meterveranderingen, wat een betere nul-op-de-meter (NoM) kan opleveren. De opties:\n\n- **Conservatief** (5s) is het advies van Indevolt en de standaard. Het past bij een meter die elke 5s bijwerkt, het gebruikelijke tempo in Home Assistant: met zo'n meter reageert de batterij bij een hogere snelheid niet sneller.\n- **Normaal** (3s) past bij een meter die elke 3s bijwerkt.\n- **Snel** (2s) past bij een meter die elke 2s bijwerkt. Met een meter die elke seconde bijwerkt is het de veilige keuze: de batterij krijgt dan hooguit elke 2s een nieuwe opdracht.\n- **Maximaal** (1s) stuurt tot elke seconde een opdracht en wacht niet langer 1s tussen verzoeken, wat onder het gedocumenteerde minimum van Indevolt ligt. Het helpt alleen met een meter die elke seconde bijwerkt; kies bij een tragere meter **Snel**. Zet bij **Maximaal** ook PD Min. Cyclusinterval op 0 als elke batterij in Omnibattery een Indevolt is.",
         "data": {
           "indevolt_request_speed": "Verzoeksnelheid"
         },
         "data_description": {
-          "indevolt_request_speed": "Elke snelheid sneller dan 5s is op eigen risico: je bent zelf verantwoordelijk om te controleren of je batterij, Home Assistant en netwerk het kunnen bijhouden. Op de apparaatpagina hoort Verzoekinterval (effectief) gelijk te blijven aan je keuze, en horen Leeslatentie (P95) en Schrijflatentie (P95) ruim onder 1s te blijven.\n\nUitproberen kan: antwoordt de batterij traag of niet, dan schakelt de Indevolt-driver van OmniBattery automatisch terug naar een rustiger tempo, totdat de reactiesnelheid weer hersteld is."
+          "indevolt_request_speed": "Elke snelheid sneller dan 5s is op eigen risico: je bent zelf verantwoordelijk om te controleren of je batterij, Home Assistant en netwerk het kunnen bijhouden. Op de apparaatpagina hoort Verzoekinterval (effectief) gelijk te blijven aan je keuze, en horen Leeslatentie (P95) en Schrijflatentie (P95) ruim onder 1s te blijven.\n\nUitproberen kan: antwoordt de batterij traag of niet, dan schakelt de Indevolt-driver van Omnibattery automatisch terug naar een rustiger tempo, totdat de reactiesnelheid weer hersteld is."
         }
       },
       "reconfigure_battery_anker": {
@@ -706,7 +706,7 @@
       },
       "battery_connection_indevolt": {
         "title": "Batterij {battery_num} configureren — Verbinding (Indevolt)",
-        "description": "Voer het IP-adres van Indevolt-batterij {battery_num} in. Schakel in de Indevolt-app de lokale API in met het protocol **HTTP** (niet HTTP Digest). OmniBattery stuurt de batterij alleen aan in de modus **Realtime**, die je in de Indevolt-app kiest; de modus zelf wijzigt OmniBattery nooit.",
+        "description": "Voer het IP-adres van Indevolt-batterij {battery_num} in. Schakel in de Indevolt-app de lokale API in met het protocol **HTTP** (niet HTTP Digest). Omnibattery stuurt de batterij alleen aan in de modus **Realtime**, die je in de Indevolt-app kiest; de modus zelf wijzigt Omnibattery nooit.",
         "data": {
           "name": "Naam",
           "host": "IP-adres",
@@ -720,17 +720,17 @@
       },
       "indevolt_request_speed": {
         "title": "Batterij {battery_num} configureren — Verzoeksnelheid (Indevolt)",
-        "description": "Met een hogere verzoeksnelheid reageert je batterij sneller op meterveranderingen, wat een betere nul-op-de-meter (NoM) kan opleveren. De opties:\n\n- **Conservatief** (5s) is het advies van Indevolt en de standaard. Het past bij een meter die elke 5s bijwerkt, het gebruikelijke tempo in Home Assistant: met zo'n meter reageert de batterij bij een hogere snelheid niet sneller.\n- **Normaal** (3s) past bij een meter die elke 3s bijwerkt.\n- **Snel** (2s) past bij een meter die elke 2s bijwerkt. Met een meter die elke seconde bijwerkt is het de veilige keuze: de batterij krijgt dan hooguit elke 2s een nieuwe opdracht.\n- **Maximaal** (1s) stuurt tot elke seconde een opdracht en wacht niet langer 1s tussen verzoeken, wat onder het gedocumenteerde minimum van Indevolt ligt. Het helpt alleen met een meter die elke seconde bijwerkt; kies bij een tragere meter **Snel**. Zet bij **Maximaal** ook PD Min. Cyclusinterval op 0 als elke batterij in OmniBattery een Indevolt is.",
+        "description": "Met een hogere verzoeksnelheid reageert je batterij sneller op meterveranderingen, wat een betere nul-op-de-meter (NoM) kan opleveren. De opties:\n\n- **Conservatief** (5s) is het advies van Indevolt en de standaard. Het past bij een meter die elke 5s bijwerkt, het gebruikelijke tempo in Home Assistant: met zo'n meter reageert de batterij bij een hogere snelheid niet sneller.\n- **Normaal** (3s) past bij een meter die elke 3s bijwerkt.\n- **Snel** (2s) past bij een meter die elke 2s bijwerkt. Met een meter die elke seconde bijwerkt is het de veilige keuze: de batterij krijgt dan hooguit elke 2s een nieuwe opdracht.\n- **Maximaal** (1s) stuurt tot elke seconde een opdracht en wacht niet langer 1s tussen verzoeken, wat onder het gedocumenteerde minimum van Indevolt ligt. Het helpt alleen met een meter die elke seconde bijwerkt; kies bij een tragere meter **Snel**. Zet bij **Maximaal** ook PD Min. Cyclusinterval op 0 als elke batterij in Omnibattery een Indevolt is.",
         "data": {
           "indevolt_request_speed": "Verzoeksnelheid"
         },
         "data_description": {
-          "indevolt_request_speed": "Elke snelheid sneller dan 5s is op eigen risico: je bent zelf verantwoordelijk om te controleren of je batterij, Home Assistant en netwerk het kunnen bijhouden. Op de apparaatpagina hoort Verzoekinterval (effectief) gelijk te blijven aan je keuze, en horen Leeslatentie (P95) en Schrijflatentie (P95) ruim onder 1s te blijven.\n\nUitproberen kan: antwoordt de batterij traag of niet, dan schakelt de Indevolt-driver van OmniBattery automatisch terug naar een rustiger tempo, totdat de reactiesnelheid weer hersteld is."
+          "indevolt_request_speed": "Elke snelheid sneller dan 5s is op eigen risico: je bent zelf verantwoordelijk om te controleren of je batterij, Home Assistant en netwerk het kunnen bijhouden. Op de apparaatpagina hoort Verzoekinterval (effectief) gelijk te blijven aan je keuze, en horen Leeslatentie (P95) en Schrijflatentie (P95) ruim onder 1s te blijven.\n\nUitproberen kan: antwoordt de batterij traag of niet, dan schakelt de Indevolt-driver van Omnibattery automatisch terug naar een rustiger tempo, totdat de reactiesnelheid weer hersteld is."
         }
       },
       "indevolt_mode_notice": {
         "title": "Batterij {battery_num} — Realtime-modus vereist",
-        "description": "De batterij staat niet in de Realtime-modus. De installatie gaat verder en OmniBattery houdt de batterij in de gaten, maar stuurt haar pas aan zodra je in de Indevolt-app **Realtime** kiest. De aansturing start dan vanzelf."
+        "description": "De batterij staat niet in de Realtime-modus. De installatie gaat verder en Omnibattery houdt de batterij in de gaten, maar stuurt haar pas aan zodra je in de Indevolt-app **Realtime** kiest. De aansturing start dan vanzelf."
       },
       "battery_connection_huawei": {
         "title": "Configure battery {battery_num} — Connection (Huawei)",
@@ -1363,17 +1363,17 @@
       },
       "indevolt_request_speed": {
         "title": "Batterij {battery_num} configureren — Verzoeksnelheid (Indevolt)",
-        "description": "Met een hogere verzoeksnelheid reageert je batterij sneller op meterveranderingen, wat een betere nul-op-de-meter (NoM) kan opleveren. De opties:\n\n- **Conservatief** (5s) is het advies van Indevolt en de standaard. Het past bij een meter die elke 5s bijwerkt, het gebruikelijke tempo in Home Assistant: met zo'n meter reageert de batterij bij een hogere snelheid niet sneller.\n- **Normaal** (3s) past bij een meter die elke 3s bijwerkt.\n- **Snel** (2s) past bij een meter die elke 2s bijwerkt. Met een meter die elke seconde bijwerkt is het de veilige keuze: de batterij krijgt dan hooguit elke 2s een nieuwe opdracht.\n- **Maximaal** (1s) stuurt tot elke seconde een opdracht en wacht niet langer 1s tussen verzoeken, wat onder het gedocumenteerde minimum van Indevolt ligt. Het helpt alleen met een meter die elke seconde bijwerkt; kies bij een tragere meter **Snel**. Zet bij **Maximaal** ook PD Min. Cyclusinterval op 0 als elke batterij in OmniBattery een Indevolt is.",
+        "description": "Met een hogere verzoeksnelheid reageert je batterij sneller op meterveranderingen, wat een betere nul-op-de-meter (NoM) kan opleveren. De opties:\n\n- **Conservatief** (5s) is het advies van Indevolt en de standaard. Het past bij een meter die elke 5s bijwerkt, het gebruikelijke tempo in Home Assistant: met zo'n meter reageert de batterij bij een hogere snelheid niet sneller.\n- **Normaal** (3s) past bij een meter die elke 3s bijwerkt.\n- **Snel** (2s) past bij een meter die elke 2s bijwerkt. Met een meter die elke seconde bijwerkt is het de veilige keuze: de batterij krijgt dan hooguit elke 2s een nieuwe opdracht.\n- **Maximaal** (1s) stuurt tot elke seconde een opdracht en wacht niet langer 1s tussen verzoeken, wat onder het gedocumenteerde minimum van Indevolt ligt. Het helpt alleen met een meter die elke seconde bijwerkt; kies bij een tragere meter **Snel**. Zet bij **Maximaal** ook PD Min. Cyclusinterval op 0 als elke batterij in Omnibattery een Indevolt is.",
         "data": {
           "indevolt_request_speed": "Verzoeksnelheid"
         },
         "data_description": {
-          "indevolt_request_speed": "Elke snelheid sneller dan 5s is op eigen risico: je bent zelf verantwoordelijk om te controleren of je batterij, Home Assistant en netwerk het kunnen bijhouden. Op de apparaatpagina hoort Verzoekinterval (effectief) gelijk te blijven aan je keuze, en horen Leeslatentie (P95) en Schrijflatentie (P95) ruim onder 1s te blijven.\n\nUitproberen kan: antwoordt de batterij traag of niet, dan schakelt de Indevolt-driver van OmniBattery automatisch terug naar een rustiger tempo, totdat de reactiesnelheid weer hersteld is."
+          "indevolt_request_speed": "Elke snelheid sneller dan 5s is op eigen risico: je bent zelf verantwoordelijk om te controleren of je batterij, Home Assistant en netwerk het kunnen bijhouden. Op de apparaatpagina hoort Verzoekinterval (effectief) gelijk te blijven aan je keuze, en horen Leeslatentie (P95) en Schrijflatentie (P95) ruim onder 1s te blijven.\n\nUitproberen kan: antwoordt de batterij traag of niet, dan schakelt de Indevolt-driver van Omnibattery automatisch terug naar een rustiger tempo, totdat de reactiesnelheid weer hersteld is."
         }
       },
       "indevolt_mode_notice": {
         "title": "Batterij {battery_num} — Realtime-modus vereist",
-        "description": "De batterij staat niet in de Realtime-modus. De installatie gaat verder en OmniBattery houdt de batterij in de gaten, maar stuurt haar pas aan zodra je in de Indevolt-app **Realtime** kiest. De aansturing start dan vanzelf."
+        "description": "De batterij staat niet in de Realtime-modus. De installatie gaat verder en Omnibattery houdt de batterij in de gaten, maar stuurt haar pas aan zodra je in de Indevolt-app **Realtime** kiest. De aansturing start dan vanzelf."
       },
       "battery_connection_huawei": {
         "title": "Configure battery {battery_num} — Connection (Huawei)",

@@ -43,18 +43,18 @@ _TEXTS = {
     "en": {
         "paused_title": "Indevolt control paused: {name}",
         "realtime_mode_required": (
-            "OmniBattery paused control of **{name}** because the battery is not in "
+            "Omnibattery paused control of **{name}** because the battery is not in "
             "**Realtime** mode.\n\n"
-            "Open the Indevolt app and set the working mode to Realtime. OmniBattery "
+            "Open the Indevolt app and set the working mode to Realtime. Omnibattery "
             "then resumes control automatically."
         ),
         "handover_failed": (
-            "OmniBattery could not take control of **{name}**: the battery did not "
+            "Omnibattery could not take control of **{name}**: the battery did not "
             "confirm standby after a stop command. It keeps monitoring and retries "
             "automatically."
         ),
         "unknown_model": (
-            "**{name}** reports device type `{model}`, which OmniBattery does not know "
+            "**{name}** reports device type `{model}`, which Omnibattery does not know "
             "yet. It is monitored, but not controlled. Please report the device type "
             "so it can be added."
         ),
@@ -66,8 +66,8 @@ _TEXTS = {
         ),
         "setting_title": "Indevolt setting not applied: {name}",
         "setting_failed": (
-            "OmniBattery could not set the {setting} of **{name}** to {value}. The "
-            "battery keeps its current value, and OmniBattery shows and uses that "
+            "Omnibattery could not set the {setting} of **{name}** to {value}. The "
+            "battery keeps its current value, and Omnibattery shows and uses that "
             "value again. Try again later, or change it in the Indevolt app."
         ),
         "min_soc": "minimum SOC",
@@ -75,39 +75,42 @@ _TEXTS = {
         "max_discharge_power": "maximum discharge power",
         "throttled_title": "Indevolt battery slow: {name}",
         "throttled": (
-            "**{name}** answers slowly or not at all, so OmniBattery now waits "
+            "**{name}** answers slowly or not at all, so Omnibattery now waits "
             "{interval:.0f}s between requests. Something else may be polling the battery "
-            "too (another Home Assistant integration, EVCC, Node-RED or a script), or its "
-            "Wi-Fi link may be weak."
+            "too, such as another Home Assistant integration, or its network connection "
+            "may be weak."
         ),
         "official": (
             "\n\nThe official Indevolt integration is also polling this battery. "
-            "OmniBattery is meant to replace it: disable the Indevolt integration for "
+            "Omnibattery is meant to replace it: disable the Indevolt integration for "
             "this device to free the battery's request budget. Its controls (energy "
             "mode, discharge limit, feed-in limit) also write to the battery's flash "
             "memory whenever they are used."
         ),
         "slower": (
-            "\n\nIf this keeps happening, set the request speed of **{name}** to "
-            "**Conservative (5s)**: in Settings → Devices & services, choose Reconfigure on "
-            "OmniBattery."
+            "\n\nIf this keeps happening, lower the request speed of **{name}** one step, "
+            "to **{speed}**: in Settings → Devices & services, choose Reconfigure on "
+            "Omnibattery."
         ),
+        "speed_fast": "Fast (2s)",
+        "speed_normal": "Normal (3s)",
+        "speed_conservative": "Conservative (5s)",
     },
     "nl": {
         "paused_title": "Indevolt-aansturing gepauzeerd: {name}",
         "realtime_mode_required": (
-            "OmniBattery heeft de aansturing van **{name}** gepauzeerd, omdat de "
+            "Omnibattery heeft de aansturing van **{name}** gepauzeerd, omdat de "
             "batterij niet in de modus **Realtime** staat.\n\n"
-            "Open de Indevolt-app en zet de werkmodus op Realtime. OmniBattery neemt "
+            "Open de Indevolt-app en zet de werkmodus op Realtime. Omnibattery neemt "
             "de aansturing dan vanzelf weer over."
         ),
         "handover_failed": (
-            "OmniBattery kon de aansturing van **{name}** niet overnemen: de batterij "
-            "bevestigde geen stand-by na een stopopdracht. OmniBattery blijft de "
+            "Omnibattery kon de aansturing van **{name}** niet overnemen: de batterij "
+            "bevestigde geen stand-by na een stopopdracht. Omnibattery blijft de "
             "batterij volgen en probeert het vanzelf opnieuw."
         ),
         "unknown_model": (
-            "**{name}** meldt apparaattype `{model}`, dat OmniBattery nog niet kent. "
+            "**{name}** meldt apparaattype `{model}`, dat Omnibattery nog niet kent. "
             "De batterij wordt gevolgd, maar niet aangestuurd. Meld het apparaattype "
             "graag, zodat het kan worden toegevoegd."
         ),
@@ -119,8 +122,8 @@ _TEXTS = {
         ),
         "setting_title": "Indevolt-instelling niet toegepast: {name}",
         "setting_failed": (
-            "OmniBattery kon het {setting} van **{name}** niet op {value} zetten. De "
-            "batterij houdt haar huidige waarde, en OmniBattery toont en gebruikt die "
+            "Omnibattery kon het {setting} van **{name}** niet op {value} zetten. De "
+            "batterij houdt haar huidige waarde, en Omnibattery toont en gebruikt die "
             "waarde weer. Probeer het later opnieuw, of wijzig het in de Indevolt-app."
         ),
         "min_soc": "minimale SOC",
@@ -128,23 +131,25 @@ _TEXTS = {
         "max_discharge_power": "maximale ontlaadvermogen",
         "throttled_title": "Indevolt-batterij traag: {name}",
         "throttled": (
-            "**{name}** reageert traag of niet, dus OmniBattery wacht nu {interval:.0f}s "
-            "tussen verzoeken. Mogelijk vraagt iets anders de batterij ook uit (een andere "
-            "Home Assistant-integratie, EVCC, Node-RED of een script), of is de "
-            "wifi-verbinding zwak."
+            "**{name}** reageert traag of niet, dus Omnibattery wacht nu {interval:.0f}s "
+            "tussen verzoeken. Mogelijk vraagt iets anders de batterij ook uit, zoals een "
+            "andere Home Assistant-integratie, of is de netwerkverbinding zwak."
         ),
         "official": (
             "\n\nDe officiële Indevolt-integratie vraagt deze batterij ook uit. "
-            "OmniBattery is bedoeld als vervanging: schakel de Indevolt-integratie voor "
+            "Omnibattery is bedoeld als vervanging: schakel de Indevolt-integratie voor "
             "dit apparaat uit, zodat de batterij haar verzoeken niet hoeft te delen. De "
             "bediening van die integratie (werkmodus, ontlaadlimiet, terugleverlimiet) "
             "schrijft bovendien naar het flashgeheugen van de batterij zodra je die gebruikt."
         ),
         "slower": (
-            "\n\nGebeurt dit vaker, zet de verzoeksnelheid van **{name}** dan op "
-            "**Conservatief (5s)**: kies in Instellingen → Apparaten & diensten bij "
-            "OmniBattery voor Opnieuw configureren."
+            "\n\nGebeurt dit vaker, zet de verzoeksnelheid van **{name}** dan een stap "
+            "lager, op **{speed}**: kies in Instellingen → Apparaten & diensten bij "
+            "Omnibattery voor Opnieuw configureren."
         ),
+        "speed_fast": "Snel (2s)",
+        "speed_normal": "Normaal (3s)",
+        "speed_conservative": "Conservatief (5s)",
     },
 }
 
@@ -253,12 +258,13 @@ class IndevoltNotifier:
     def flash_writes_resumed(self) -> None:
         ir.async_delete_issue(self._hass, DOMAIN, self.flash_issue_id)
 
-    def throttled(self, interval_s: float, *, suggest_slower: bool = False) -> None:
+    def throttled(self, interval_s: float, *, slower_speed: str | None = None) -> None:
+        """``slower_speed`` is the request speed one step below the chosen one, if any."""
         message = self._text("throttled", interval=interval_s)
         if self.official_integration_loaded():
             message += self._text("official")
-        if suggest_slower:
-            message += self._text("slower")
+        if slower_speed is not None:
+            message += self._text("slower", speed=self._text(f"speed_{slower_speed}"))
         self._create("throttled", self._text("throttled_title"), message)
 
     def throttle_cleared(self) -> None:

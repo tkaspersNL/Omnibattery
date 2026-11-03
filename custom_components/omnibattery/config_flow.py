@@ -611,7 +611,7 @@ async def _indevolt_probe(user_input: dict) -> tuple[dict, dict] | str:
     try:
         info = await IndevoltDriver.probe(host, port)
     except IndevoltAuthenticationError:
-        # The local API is set to HTTP Digest; OmniBattery uses plain HTTP.
+        # The local API is set to HTTP Digest; Omnibattery uses plain HTTP.
         return "indevolt_http_digest"
     except ValueError:
         return "cannot_connect"
@@ -635,7 +635,7 @@ def _indevolt_prefill(battery_data: dict, info: dict, stored: dict | None = None
 
     On its first start the driver adopts the battery's own settings and writes
     nothing (drivers/indevolt_settings.py), so a form value that differs would
-    be replaced without notice. A setting that OmniBattery and the battery
+    be replaced without notice. A setting that Omnibattery and the battery
     already agreed on (``stored``) keeps its configured value.
     """
     stored = stored or {}
@@ -1960,7 +1960,7 @@ class MarstekVenusConfigFlow(LegacyDomainMigrationMixin, ConfigFlow, domain=DOMA
         )
 
     async def async_step_indevolt_request_speed(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Choose how fast OmniBattery may send requests to the Indevolt battery."""
+        """Choose how fast Omnibattery may send requests to the Indevolt battery."""
         if user_input is not None:
             self._current_battery_data[CONF_INDEVOLT_REQUEST_SPEED] = _indevolt_request_speed(user_input)
             return await self.async_step_battery_limits()
@@ -4641,7 +4641,7 @@ class OptionsFlowHandler(OptionsFlow):
         )
 
     async def async_step_indevolt_request_speed(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Choose how fast OmniBattery may send requests to the Indevolt battery."""
+        """Choose how fast Omnibattery may send requests to the Indevolt battery."""
         if user_input is not None:
             self._current_battery_data[CONF_INDEVOLT_REQUEST_SPEED] = _indevolt_request_speed(user_input)
             return await self.async_step_battery_limits()
