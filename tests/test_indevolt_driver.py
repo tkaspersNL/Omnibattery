@@ -238,12 +238,14 @@ async def test_mode_loss_pauses_with_notification_and_resume_is_automatic():
     await driver.close()
 
 
-async def test_unknown_model_is_monitored_but_never_controlled():
+@pytest.mark.parametrize(("model_code", "label"), [("YZ-X9000", "YZ-X9000"), ("YZ-E1600", "BK1600")])
+async def test_an_unknown_or_gen1_model_is_monitored_but_never_controlled(model_code, label):
     clock = VirtualClock()
-    device = FakeIndevoltDevice(clock, device_type="CMS-XY9000")
+    device = FakeIndevoltDevice(clock, model_code=model_code)
     notifier = RecordingNotifier()
     driver = await connected_driver(clock, device, own=False, notifier=notifier)
     await _hold(clock, driver, 120)
+    assert driver.model_label == label
     assert driver.paused_reason == "unknown_model"
     assert notifier.count("paused", "unknown_model") == 1
     assert (await driver.read_telemetry())["battery_soc"] == 60
@@ -252,38 +254,39 @@ async def test_unknown_model_is_monitored_but_never_controlled():
     await driver.close()
 
 
-async def test_a_confirmed_model_code_gets_its_product_name():
+@pytest.mark.parametrize(("device_type", "model_code", "label"), [
+    ("CMS-SF2000", "YZ-E2000G2", "SolidFlex/PowerFlex 2000"),
+    ("CMS-SF2000", "YZ-E3000", "SolidFlex/PowerFlex 3000"),  # a SolidFlex 3000 AC
+    ("CMS-XY9000", "YZ-E3600", "SolidFlex 3600"),
+])
+async def test_the_model_code_names_the_family_and_decides_control(device_type, model_code, label):
     clock = VirtualClock()
-    driver = await connected_driver(clock, FakeIndevoltDevice(clock), own=False)
-    assert driver.model_label == "SolidFlex 2000"
-    await driver.close()
-
-
-async def test_another_model_code_is_shown_as_reported_and_the_type_still_decides_control():
-    # A SolidFlex 3000 AC reports the type of a SolidFlex 2000.
-    clock = VirtualClock()
-    device = FakeIndevoltDevice(clock, device_type="CMS-SF2000", model_code="YZ-E3000")
+    device = FakeIndevoltDevice(clock, device_type=device_type, model_code=model_code)
     driver = await connected_driver(clock, device)
-    assert driver.model_label == "YZ-E3000"
+    assert driver.model_label == label
     assert driver.control_state is ControlState.OWNED
     await driver.close()
 
 
-async def test_firmware_without_a_model_code_is_named_by_the_device_type():
+async def test_a_battery_without_a_model_code_is_monitored_only():
     clock = VirtualClock()
     device = FakeIndevoltDevice(clock, model_code=None)
-    driver = await connected_driver(clock, device, own=False)
+    notifier = RecordingNotifier()
+    driver = await connected_driver(clock, device, own=False, notifier=notifier)
     await _hold(clock, driver, 60)
-    assert driver.model_label == "SolidFlex 2000"
     assert 1 in driver.scheduler.stats()["unsupported_points"]
+    assert driver.model_label is None
+    assert driver.paused_reason == "unknown_model"
+    assert device.set_data_requests == []
     await driver.close()
 
 
-def test_the_model_name_falls_back_to_the_device_type():
-    assert model_label_for("CMS-SP2000", None) == "PowerFlex 2000"
-    assert model_label_for("CMS-XY9000", "") == "CMS-XY9000"
-    assert model_label_for("CMS-SP2000", " YZ-X2000 ") == "YZ-X2000"
-    assert model_label_for(None, None) is None
+def test_model_names():
+    assert model_label_for("YZ-E2000G2") == "SolidFlex/PowerFlex 2000"
+    assert model_label_for(" YZ-E2000G2-SE ") == "SolidFlex/PowerFlex 1200"
+    assert model_label_for("YZ-X2000") == "YZ-X2000"
+    assert model_label_for("") is None
+    assert model_label_for(None) is None
 
 
 async def test_control_can_be_disabled_for_monitoring_only():
@@ -478,6 +481,22 @@ async def test_firmware_advisory_is_raised_once():
     await driver.close()
 
 
+@pytest.mark.parametrize(("model_code", "f_ver", "minimum"), [
+    ("YZ-E3000", "V1408.0A.303E", "V1409.08.3034"),
+    ("YZ-E3000", "V140F.0A.303E", None),
+    ("YZ-E3600", "V1000.00.0000", None),  # no minimum published
+])
+async def test_the_firmware_is_checked_against_the_minimum_of_its_family(model_code, f_ver, minimum):
+    clock = VirtualClock()
+    device = FakeIndevoltDevice(clock, model_code=model_code, f_ver=f_ver)
+    notifier = RecordingNotifier()
+    driver = await connected_driver(clock, device, notifier=notifier)
+    await _hold(clock, driver, 60)
+    expected = [("firmware", f_ver, minimum)] if minimum else []
+    assert [e for e in notifier.events if e[0] == "firmware"] == expected
+    await driver.close()
+
+
 def test_firmware_comparison():
     assert not firmware_below("V140E.0B.003E", "V1406.07.002E")  # a CMS-SF2000 on firmware V1.4.0E
     assert firmware_below("V1405.07.002E", "V1406.07.002E")
@@ -554,7 +573,8 @@ async def test_absent_pack_points_do_not_hold_up_control_reads():
     driver = await connected_driver(clock, device)
     await clock.run(360)
     reads = [r for r in device.requests if r.endpoint == "Indevolt.GetData"]
-    singles = [r for r in reads if len(r.config["t"]) == 1]
+    assert reads[0].config["t"] == [1]  # the model code, read once per start
+    singles = [r for r in reads[1:] if len(r.config["t"]) == 1]
     assert len(singles) == 8  # each missing point verified once, then skipped
     gaps = [b.at - a.at for a, b in zip(singles, singles[1:])]
     assert min(gaps) >= 30  # verify reads are spread out
