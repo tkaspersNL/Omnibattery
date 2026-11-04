@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Indevolt SolidFlex / PowerFlex support** (#491): a driver for Indevolt batteries over the battery's local HTTP API: SolidFlex 2000 and SolidFlex 3000 AC (tested), PowerFlex 2000, PowerFlex 3000 and SolidFlex 1200 (same API). Omnibattery controls the battery in its Realtime mode only and never changes the working mode. A per-battery request speed (Conservative 5s by default, Normal 3s, Fast 2s, Maximum 1s) sets how often Omnibattery sends the battery a request, and it slows down by itself when the battery answers slowly. See [Indevolt SolidFlex / PowerFlex](site-docs/configuration/batteries/indevolt.md).
+- **Indevolt SolidFlex / PowerFlex support** (#491): a driver for Indevolt batteries over the battery's local HTTP API: SolidFlex 2000 and SolidFlex 3000 AC (tested); PowerFlex 2000 and 3000, SolidFlex and PowerFlex 1200, and SolidFlex 3600 (same API). Omnibattery controls the battery in its Realtime mode only and never changes the working mode. A per-battery request speed (Conservative 5s by default, Normal 3s, Fast 2s, Maximum 1s) sets how often Omnibattery sends the battery a request, and it slows down by itself when the battery answers slowly. See [Indevolt SolidFlex / PowerFlex](site-docs/configuration/batteries/indevolt.md).
 
 ## [1.5.1b2] - 2026-10-13
 
