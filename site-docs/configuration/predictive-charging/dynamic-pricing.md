@@ -10,8 +10,8 @@ Dynamic Pricing reads a future price calendar and buys the calculated energy def
 
 ## Before you start
 
-- Configure one supported source: **Nordpool**, **PVPC**, **CKW**, **EPEX Spot**, **ENTSO-e**, **Zonneplan**, or **Tibber**.
-- Select the provider’s current-price entity unless you use Tibber. Tibber uses the official integration’s `tibber.get_prices` service and needs no price sensor.
+- Configure one supported source: **Nordpool**, **PVPC**, **CKW**, **EPEX Spot**, **ENTSO-e**, **EnergyZero**, **Zonneplan**, **Frank Energie**, or **Tibber**.
+- Select the provider’s current-price entity unless you use Tibber. EnergyZero uses the selected electricity entity to call `energyzero.get_energy_prices`; Tibber uses `tibber.get_prices` and needs no price sensor.
 - A solar forecast is optional. A remaining-energy forecast improves daytime replanning and avoids counting solar already produced. **High-Price Sale** set to *Surplus only* or above needs the configured forecast integration to provide forecasts to Home Assistant’s Energy dashboard, such as Solcast or Forecast.Solar.
 - Decide whether you need an export-price source. It is optional and is used by **Surplus Price Hold** and **High-Price Sale**; leave it empty when export is credited at the import price.
 
@@ -66,7 +66,10 @@ Optional controls in the **Control** tab solve different problems:
 ??? "Advanced details"
     ### Price-source normalization
 
-    Omnibattery supports **Nordpool**, **PVPC**, **CKW**, **EPEX Spot**, **ENTSO-e**, **Zonneplan**, and **Tibber**. Provider parsers normalize dated price periods into the same local schedule.
+    Omnibattery supports **Nordpool**, **PVPC**, **CKW**, **EPEX Spot**, **ENTSO-e**, **EnergyZero**, **Zonneplan**, **Frank Energie**, and **Tibber**. Provider parsers normalize dated price periods into the same local schedule.
+
+    Frank Energie needs the [Frank Energie HACS integration](https://github.com/HiDiHo01/home-assistant-frank_energie). It reads the chosen sensor’s `prices` attribute (`from`, `till`, `price`), including tomorrow when available. Prices are already tax-inclusive major currency/kWh and are not rescaled. Use the all-in price sensor for import, for example `sensor.frank_energie_electricity_prices_current_electricity_price_all_in`, and the including-tax-and-markup sensor for export, for example `sensor.frank_energie_electricity_prices_current_electricity_price_including_tax_and_markup`. Periods may be hourly or quarter-hourly.
+    EnergyZero calls `energyzero.get_energy_prices` for today and tomorrow using the selected electricity sensor's integration entry, market/all-in price type, and hourly/quarter-hourly interval. Prices include VAT and are already in EUR/kWh; tomorrow is retained when published, while unavailable tomorrow data does not discard today's prices.
 
     Zonneplan reads the chosen sensor’s `forecast` attribute, including tomorrow when available. Forecast amounts are divided by 10,000,000 into tax-inclusive major currency/kWh; the current sensor state is already major currency/kWh. Negative and zero prices are preserved. Modern entries keep explicit period boundaries; legacy entries use one-hour periods.
 
@@ -192,7 +195,9 @@ Optional controls in the **Control** tab solve different problems:
 
     The margin is disabled when empty or set to 0. It applies in addition to **Max Price Threshold**, and the stricter ceiling wins. It gates the 00:05 plan and every later rebuild, including the late-day assessment. Energy needed for **Guaranteed Minimum SOC** is the exception: only **Max Price Threshold** limits it.
 
-    **Round-Trip Efficiency** defaults to 0.85 and represents marginal AC-to-AC energy efficiency. Lower values require a larger gross spread. It is distinct from lifetime charge/discharge totals, which include standby consumption.
+    `expected_discharge_price` is set per stored kWh, not for the whole deficit. The cheapest charge periods take the most expensive later periods, and each later period counts once. So the first kWh is compared with the evening peak, and the last with whatever cheaper hour it would replace. Energy the home needs at a given time is compared with the import price at that time. When importing then costs less than charging earlier with the round-trip losses, that energy is left to the grid and reported as `cheaper_to_import_kwh` instead of a shortfall. If no period qualifies, `chronological_plan_reason` is `price_threshold` and `cheapest_rejected_slot` shows the cheapest period with the ceiling it missed.
+
+    **Round-Trip Efficiency** represents marginal AC-to-AC energy efficiency; lower values require a larger gross spread. While it is left at the default 0.85, the integration uses the efficiency it measures on your batteries instead (capacity-weighted across the fleet), once a battery has enough history: at least 50 equivalent cycles with a lifetime ratio between 0.75 and 0.95, or, on Venus A/D, both charge and discharge legs sampled. Without a valid measurement it stays at 0.85. Any other value you set is always used as is. The value in use and its source are shown as `round_trip_efficiency_used` and `round_trip_efficiency_source` on the predictive-charging diagnostics.
 
     The same minimum margin applies to **High-Price Sale**, so the charge and sell decisions use one economic risk preference.
 

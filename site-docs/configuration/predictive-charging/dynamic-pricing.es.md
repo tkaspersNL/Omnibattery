@@ -10,7 +10,7 @@ Precio dinámico lee un calendario de precios futuros y compra el déficit energ
 
 ## Antes de empezar
 
-- Configura una fuente compatible: **Nordpool**, **PVPC**, **CKW**, **EPEX Spot**, **ENTSO-e**, **Zonneplan** o **Tibber**.
+- Configura una fuente compatible: **Nordpool**, **PVPC**, **CKW**, **EPEX Spot**, **ENTSO-e**, **EnergyZero**, **Zonneplan**, **Frank Energie** o **Tibber**.
 - Selecciona la entidad de precio actual del proveedor salvo que uses Tibber. Tibber usa el servicio `tibber.get_prices` de la integración oficial y no necesita sensor de precio.
 - La previsión solar es opcional. Una previsión de energía restante mejora la replanificación diurna y evita contar la solar ya producida. **Venta a precio alto** en *Solo excedente* o superior necesita que la integración de previsión configurada proporcione previsiones al panel de Energía de Home Assistant, como Solcast o Forecast.Solar.
 - Decide si necesitas una fuente de precio de exportación. Es opcional y la usan **Retención de excedente por precio** y **Venta a precio alto**; déjala vacía cuando la exportación se remunere al precio de importación.
@@ -66,7 +66,10 @@ Los controles opcionales de la pestaña **Control** resuelven problemas distinto
 ??? "Detalles avanzados"
     ### Normalización de fuentes de precio
 
-    Omnibattery admite **Nordpool**, **PVPC**, **CKW**, **EPEX Spot**, **ENTSO-e**, **Zonneplan** y **Tibber**. Los analizadores de proveedores normalizan los periodos de precios fechados al mismo horario local.
+    Omnibattery admite **Nordpool**, **PVPC**, **CKW**, **EPEX Spot**, **ENTSO-e**, **EnergyZero**, **Zonneplan**, **Frank Energie** y **Tibber**. Los analizadores de proveedores normalizan los periodos de precios fechados al mismo horario local.
+
+    Frank Energie necesita la [integración HACS de Frank Energie](https://github.com/HiDiHo01/home-assistant-frank_energie). Lee el atributo `prices` del sensor elegido (`from`, `till`, `price`), incluido mañana cuando está disponible. Los precios ya están en moneda principal/kWh con impuestos incluidos y no se reescalan. Usa el sensor de precio all-in para importación, por ejemplo `sensor.frank_energie_electricity_prices_current_electricity_price_all_in`, y el sensor con impuestos y margen para exportación, por ejemplo `sensor.frank_energie_electricity_prices_current_electricity_price_including_tax_and_markup`. Los periodos pueden ser horarios o cuartohorarios.
+    EnergyZero llama a `energyzero.get_energy_prices` para hoy y mañana usando la entidad eléctrica seleccionada, su entrada de integración, el tipo de precio de mercado/todo incluido y el intervalo horario/cuarto horario. Los precios incluyen IVA y ya están en EUR/kWh. Si los precios de mañana aún no están disponibles, se conservan los de hoy.
 
     Zonneplan lee el atributo `forecast` del sensor elegido, incluido mañana cuando está disponible. Los importes de previsión se dividen por 10.000.000 para obtener moneda principal/kWh con impuestos incluidos; el estado actual del sensor ya está en moneda principal/kWh. Se conservan los precios negativos y cero. Las entradas modernas conservan límites de periodo explícitos; las entradas heredadas usan periodos de una hora.
 
@@ -192,7 +195,9 @@ Los controles opcionales de la pestaña **Control** resuelven problemas distinto
 
     El margen se desactiva cuando está vacío o se establece en 0. Se aplica además de **Umbral máximo de precio**, y prevalece el techo más estricto. Filtra el plan de las 00:05 y cada reconstrucción posterior, incluida la evaluación de final del día. La energía necesaria para **SOC mínimo garantizado** es la excepción: solo la limita **Umbral máximo de precio**.
 
-    **Eficiencia de ciclo completo** tiene por defecto 0,85 y representa la eficiencia marginal de energía de CA a CA. Valores inferiores requieren un diferencial bruto mayor. Es distinta de los totales vitalicios de carga/descarga, que incluyen el consumo en reposo.
+    `expected_discharge_price` se calcula por kWh almacenado, no para todo el déficit. Los periodos de carga más baratos se emparejan con los periodos posteriores más caros, y cada periodo posterior cuenta una sola vez. Así, el primer kWh se compara con el pico de la tarde y el último con la hora más barata que sustituiría. La energía que la vivienda necesita en un momento dado se compara con el precio de importación en ese momento. Si importar entonces cuesta menos que cargar antes con las pérdidas del ciclo, esa energía se deja a la red y aparece como `cheaper_to_import_kwh` en lugar de como déficit. Si ningún periodo cumple, `chronological_plan_reason` vale `price_threshold` y `cheapest_rejected_slot` muestra el periodo más barato con el techo que no alcanzó.
+
+    **Eficiencia de ciclo completo** representa la eficiencia marginal de energía de CA a CA; valores inferiores requieren un diferencial bruto mayor. Mientras se deje en el valor por defecto 0,85, la integración usa la eficiencia que mide en tus baterías (media ponderada por capacidad), cuando una batería tiene historial suficiente: al menos 50 ciclos equivalentes con una relación vitalicia entre 0,75 y 0,95 o, en Venus A/D, ambos tramos de carga y descarga muestreados. Sin una medición válida se mantiene en 0,85. Cualquier otro valor que establezcas se usa tal cual. El valor en uso y su origen aparecen como `round_trip_efficiency_used` y `round_trip_efficiency_source` en el diagnóstico de carga predictiva.
 
     El mismo margen mínimo se aplica a **Venta a precio alto**, de manera que las decisiones de compra y venta usan una sola preferencia de riesgo económico.
 

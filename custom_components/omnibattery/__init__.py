@@ -235,6 +235,8 @@ from .const import (
     HOT_PATH_READBACK_MAX_LATENCY_S,
     DISCHARGE_ENGAGE_GRACE_S,
     ENGAGE_GRACE_STEP_FACTOR,
+    PD_QUALITY_RESTART_GAP_S,
+    PD_QUALITY_RESTART_SETTLE_S,
     HIGH_SOC_CHARGE_TAPER_FLOOR,
     HIGH_SOC_CHARGE_TAPER_GRACE_S,
     IDLE_RUNAWAY_POWER_W,
@@ -284,6 +286,7 @@ from .control.temperature_limit import TemperatureChargeLimitManager
 from .control.phase_power_limit import PhasePowerLimiter
 from .pricing import (
     DynamicPricingSchedule,
+    PriceSlot,
     SLOT_PURPOSE_COMBINED,
     SLOT_PURPOSE_DEFICIT,
     SLOT_PURPOSE_NEGATIVE_PRICE,
@@ -750,6 +753,7 @@ class ChargeDischargeController:
         self._last_cycle_monotonic = 0.0
         # Set by a cycle that found no new meter sample and kept the last command.
         self._cycle_kept_last_command = False
+        self._timer_tick_paced = False
         self._background_tasks: set[asyncio.Task] = set()
         self._startup_dynamic_pricing_task: asyncio.Task | None = None
         self._unloading = False
@@ -827,6 +831,10 @@ class ChargeDischargeController:
         self._pd_quality_step_grace_s = 10.0  # skip the metric this long after a step
         self._pd_quality_settle_until = 0.0   # monotonic deadline; skip while now < this
         self._pd_quality_prev_target = None   # previous active_target for step detection
+        # Start of the warm-up after a restart (see PD_QUALITY_RESTART_GAP_S):
+        # the end of the settle window until the first reading after it arrives,
+        # then that reading's time. None when the metric is not warming up.
+        self._pd_quality_warmup_start = None
         # True when the PD has no headroom to reduce the error (battery full while it
         # would charge, empty while it would discharge, or output pinned at the power
         # rail). Surfaced as the "battery_limited" quality state; not a tuning fault.
@@ -1143,6 +1151,7 @@ class ChargeDischargeController:
         self.price_discharge_control: bool = config_entry.data.get(CONF_PRICE_DISCHARGE_CONTROL, False)
         self._dp_daily_avg_price: Optional[float] = None  # Computed from price slots in _evaluate_dynamic_pricing
         self._dp_arbitrage_ceiling: Optional[float] = None  # Set per evaluation when the margin gate is on
+        self._dp_planning_end: Optional[datetime] = None  # Extended planning horizon of the last evaluation (#710)
         # Tibber is service-based (no price sensor): the engine polls tibber.get_prices
         # and caches the parsed slots here.
         self._tibber_price_slots: list = []
@@ -1152,6 +1161,12 @@ class ChargeDischargeController:
         self._nordpool_price_slots: list = []
         self._nordpool_prices_fetched_at: Optional[datetime] = None
         self._nordpool_price_source_key: Optional[tuple] = None
+        self._energyzero_price_slots: dict[
+            tuple[str, str, str], list[PriceSlot]
+        ] = {}
+        self._energyzero_prices_fetched_at: dict[
+            tuple[str, str, str], datetime
+        ] = {}
 
         # Price-based discharge control flag (set each cycle by pricing handlers, consumed by PD section)
         self._price_based_discharge_blocked: bool = False
@@ -3208,6 +3223,14 @@ class ChargeDischargeController:
         that transient is skipped through a short grace window so it doesn't inflate
         the metric. Detection is source-agnostic: it keys on active_target moving.
 
+        After a long gap (the PD was not in control: a grid-charge slot, the weekly
+        full charge, manual mode, ...) the stored numbers describe the situation
+        before the gap, and the batteries are still running the previous command
+        when the PD takes over. The metric then starts over: it skips the hand-over
+        through the same settle window, and weighs the readings after it equally
+        until they cover one metric window. Until then it reports no RMS, so the
+        sensor shows "collecting_data" instead of a verdict on a few seconds.
+
         While the PD is battery-limited (no headroom to reduce the error) the residual
         error is not a tuning fault, so the metric is skipped too — the sensor reports
         the "battery_limited" state instead.
@@ -3219,6 +3242,16 @@ class ChargeDischargeController:
         ):
             self._pd_quality_settle_until = now + self._pd_quality_step_grace_s
         self._pd_quality_prev_target = active_target
+        if (
+            self._pd_quality_last_ts is not None
+            and now - self._pd_quality_last_ts > PD_QUALITY_RESTART_GAP_S
+        ):
+            self._pd_quality_settle_until = max(
+                self._pd_quality_settle_until, now + PD_QUALITY_RESTART_SETTLE_S
+            )
+            self._pd_quality_rms_ema = None
+            self._pd_quality_osc_ema = 0.0
+            self._pd_quality_warmup_start = self._pd_quality_settle_until
 
         if pd_limited or now < self._pd_quality_settle_until:
             # Keep the timestamp fresh so the EMA resumes smoothly (small dt) instead
@@ -3236,10 +3269,21 @@ class ChargeDischargeController:
         if dt <= 0:
             return
         self._pd_quality_last_advance_ts = now
-        alpha = dt / (self._pd_quality_tau + dt)
+        tau = self._pd_quality_tau
+        if self._pd_quality_warmup_start is not None and self._pd_quality_rms_ema is not None:
+            # Restart warm-up: the window grows with the data, so every reading
+            # since the restart weighs the same until a full window is covered.
+            warm_s = now - self._pd_quality_warmup_start
+            if warm_s >= tau:
+                self._pd_quality_warmup_start = None
+            else:
+                tau = warm_s
+        alpha = dt / (tau + dt)
         sq = error * error
         if self._pd_quality_rms_ema is None:
             self._pd_quality_rms_ema = sq
+            if self._pd_quality_warmup_start is not None:
+                self._pd_quality_warmup_start = now
         else:
             self._pd_quality_rms_ema += alpha * (sq - self._pd_quality_rms_ema)
         # Oscillation rate in events/min: the instantaneous rate for this gap is
@@ -3275,8 +3319,17 @@ class ChargeDischargeController:
 
     @property
     def pd_quality_rms_error(self) -> float | None:
-        """RMS of the grid-control error over the metric window (W), or None."""
+        """RMS of the grid-control error over the metric window (W), or None.
+
+        None also while the metric restarts after a long gap and its fresh
+        readings don't cover one metric window yet.
+        """
         if self._pd_quality_rms_ema is None:
+            return None
+        if (
+            self._pd_quality_warmup_start is not None
+            and time.monotonic() - self._pd_quality_warmup_start < self._pd_quality_tau
+        ):
             return None
         return math.sqrt(max(0.0, self._pd_quality_rms_ema))
 
@@ -4068,6 +4121,12 @@ class ChargeDischargeController:
             battery_pct = battery_reserve(coordinator) if callable(battery_reserve) else None
             if battery_pct is None:
                 battery_pct = reserve_pct
+            # No share, nothing held back: a battery on its floor is stopped
+            # there by min_soc, and holding it too reported the fleet as held
+            # while the other battery was still discharging.
+            if battery_pct <= RESERVE_SOC_TOLERANCE_PCT:
+                self.remove_discharge_block("price_reserve", coordinator=coordinator)
+                continue
             reserved_floor = min(100.0, floor + battery_pct)
             # A reserve of everything stored puts the floor exactly on the
             # whole-percent SOC, and floor + pct rounds either side of it.
@@ -5022,6 +5081,20 @@ class ChargeDischargeController:
         )
         return avg_soc < self.capacity_protection_soc_threshold
 
+    def _planning_floor_soc(self, coordinator) -> float:
+        """Lowest SOC that may cover normal load in an energy plan (#627).
+
+        Below the peak-shaving threshold the battery only covers load above
+        the limit, so the band between ``min_soc`` and the threshold is a
+        peak reserve, not energy for normal consumption.
+        """
+        floor = float(coordinator.min_soc)
+        if getattr(self, "capacity_protection_enabled", False):
+            threshold = getattr(self, "capacity_protection_soc_threshold", None)
+            if threshold is not None:
+                floor = max(floor, float(threshold))
+        return floor
+
     def reset_pid_state(self):
         """Manually reset PID controller state. Useful when system is unstable."""
         _LOGGER.warning("PID: MANUAL RESET requested - clearing all PID state variables")
@@ -5161,8 +5234,12 @@ class ChargeDischargeController:
         )
         avg_soc = sum(c.data.get("battery_soc", 0) for c in coordinators_with_data) / len(coordinators_with_data)
 
-        # Get min_soc from coordinators (use max if mixed configs for safety)
-        min_soc_values = [c.min_soc for c in coordinators_with_data]
+        # Get min_soc from coordinators (use max if mixed configs for safety).
+        # Peak shaving's SOC band is a peak reserve, not normal-load energy (#627).
+        min_soc_values = [
+            ChargeDischargeController._planning_floor_soc(self, c)
+            for c in coordinators_with_data
+        ]
         min_soc = max(min_soc_values) if min_soc_values else 20  # Default 20% if unavailable
 
         # Calculate energy components
@@ -5172,14 +5249,14 @@ class ChargeDischargeController:
             for c in coordinators_with_data
         )
         cutoff_energy_kwh = sum(
-            max(0.0, float(c.min_soc)) / 100.0
+            max(0.0, ChargeDischargeController._planning_floor_soc(self, c)) / 100.0
             * float(c.data.get("battery_total_energy", 0) or 0.0)
             for c in coordinators_with_data
         )
         usable_energy_kwh = sum(
             max(
                 0.0,
-                (float(c.data.get("battery_soc", 0) or 0.0) - float(c.min_soc))
+                (float(c.data.get("battery_soc", 0) or 0.0) - ChargeDischargeController._planning_floor_soc(self, c))
                 / 100.0
                 * float(c.data.get("battery_total_energy", 0) or 0.0),
             )
@@ -5446,6 +5523,7 @@ class ChargeDischargeController:
                 # Consumers (the per-battery stop target) need to know the floor
                 # is the binding constraint here too, not only in the balanced
                 # branch below.
+                "floor_deficit_kwh": floor_deficit_kwh,
                 "floor_active": (
                     floor_deficit_kwh > 0
                     and floor_deficit_kwh > avg_consumption_kwh - total_available_kwh
@@ -5551,6 +5629,7 @@ class ChargeDischargeController:
             "days_in_history": days_in_history,
             "solar_surplus_kwh": solar_surplus_kwh,
             "floor_active": floor_active,
+            "floor_deficit_kwh": floor_deficit_kwh,
             "weekly_full_charge_active": weekly_active,
             "consumption_scope": consumption_scope,
             "consumption_forecast_source": (
@@ -5680,7 +5759,11 @@ class ChargeDischargeController:
         return self._check_time_window()
 
     def _compute_deficit_target_soc(
-        self, planned_kwh: float | None = None, *, log: bool = True
+        self,
+        planned_kwh: float | None = None,
+        *,
+        log: bool = True,
+        window_hours: float | None = None,
     ) -> Optional[dict]:
         """Calculate per-battery grid-only SOC targets for a forecast deficit.
 
@@ -5693,6 +5776,12 @@ class ChargeDischargeController:
           grid_charge   = max(0, total_gap - solar_surplus)
           share_i       = (gap_i / total_gap) × grid_charge
           target_soc_i  = min(max_soc_i, soc_i + share_i / capacity_i × 100)
+
+        With ``window_hours`` (what is left of a chronological slot), a share
+        is capped at what the battery can charge in that time and the rest
+        goes to the batteries with time to spare. Otherwise the one with the
+        smaller gap reached its share early and stopped, while the other could
+        not charge its larger share before the slot ended.
 
         Returns dict {coordinator: target_soc_%} or None if data is insufficient
         (callers fall back to max_soc behaviour when None is returned).
@@ -5752,6 +5841,12 @@ class ChargeDischargeController:
         ):
             floor_soc = float(getattr(self, "_predictive_min_soc_floor", 0.0) or 0.0)
 
+        shares = {c: (gaps[c] / total_gap_kwh) * grid_charge_kwh for c in gaps}
+        if window_hours is not None:
+            shares = ChargeDischargeController._shares_within_window(
+                self, gaps, grid_charge_kwh, window_hours
+            )
+
         targets: dict = {}
         for c in coordinators_with_data:
             capacity = c.data.get("battery_total_energy", 0) or 0
@@ -5760,7 +5855,7 @@ class ChargeDischargeController:
             if capacity <= 0:
                 targets[c] = ceiling
                 continue
-            share_kwh = (gaps[c] / total_gap_kwh) * grid_charge_kwh
+            share_kwh = shares[c]
             target = min(ceiling, current_soc + (share_kwh / capacity) * 100.0)
             if floor_soc:
                 target = min(ceiling, max(target, floor_soc))
@@ -5774,6 +5869,56 @@ class ChargeDischargeController:
             {c.name: f"{v:.1f}%" for c, v in targets.items()},
         )
         return targets
+
+    def _shares_within_window(
+        self, gaps: dict, grid_charge_kwh: float, window_hours: float
+    ) -> dict:
+        """Split ``grid_charge_kwh`` by gap, each share within what fits in time.
+
+        A battery's share is capped at what it charges in ``window_hours`` at
+        its present power limit (taper and temperature included), and the
+        excess goes to the others by gap. What no battery can take in time is
+        spread back over the gaps, so every battery then charges to the end of
+        the window and the slot's shortfall is still counted from the targets.
+        """
+        from .const import CHARGE_EFFICIENCY
+
+        total_gap_kwh = sum(gaps.values())
+        by_gap = {c: (gap / total_gap_kwh) * grid_charge_kwh for c, gap in gaps.items()}
+        caps: dict = {}
+        for c, gap in gaps.items():
+            try:
+                power_w = float(ChargeDischargeController._battery_power_limit(self, c, True))
+            except (AttributeError, TypeError, ValueError):
+                # Lightweight controller stand-ins: the plain split by gap.
+                return by_gap
+            caps[c] = min(gap, max(0.0, power_w) / 1000.0 * window_hours * CHARGE_EFFICIENCY)
+
+        shares = dict.fromkeys(gaps, 0.0)
+        remaining = grid_charge_kwh
+        open_batteries = {c for c in gaps if caps[c] > 0}
+        while remaining > 1e-9 and open_batteries:
+            weight = sum(gaps[c] for c in open_batteries)
+            full = [
+                c for c in open_batteries if remaining * gaps[c] / weight >= caps[c]
+            ]
+            if not full:
+                for c in open_batteries:
+                    shares[c] += remaining * gaps[c] / weight
+                remaining = 0.0
+                break
+            for c in full:
+                shares[c] = caps[c]
+                remaining -= caps[c]
+                open_batteries.discard(c)
+
+        if remaining > 1e-9:
+            room = {c: gaps[c] - shares[c] for c in gaps}
+            total_room = sum(room.values())
+            if total_room > 0:
+                for c in gaps:
+                    shares[c] += min(room[c], remaining * room[c] / total_room)
+        return shares
 
     def _compute_opportunistic_target_soc(self) -> Optional[dict]:
         """Return each battery's charge ceiling as the opportunity ceiling."""
@@ -5816,6 +5961,7 @@ class ChargeDischargeController:
         # Call the helpers through the class so this method remains usable in
         # the lightweight controller stand-ins used by the planning tests.
         planned_kwh = None
+        window_hours = None
         if getattr(self, "predictive_charging_mode", None) == PREDICTIVE_MODE_TIME_SLOT:
             planned_kwh = getattr(self, "_active_time_slot_quota_kwh", None)
         schedule = getattr(self, "_dynamic_pricing_schedule", None)
@@ -5831,8 +5977,9 @@ class ChargeDischargeController:
             )
             if active_slot is not None:
                 planned_kwh = schedule.slot_energy_targets_kwh.get(active_slot)
+                window_hours = max(0.0, (active_slot.end - now).total_seconds() / 3600.0)
         deficit_targets = ChargeDischargeController._compute_deficit_target_soc(
-            self, planned_kwh=planned_kwh, log=log
+            self, planned_kwh=planned_kwh, log=log, window_hours=window_hours
         )
         self._predictive_deficit_target_soc = (
             deficit_targets
@@ -6352,6 +6499,28 @@ class ChargeDischargeController:
         # Get available batteries (respecting the active target and max_soc)
         available_batteries = self._get_available_batteries(is_charging=True)
         if not available_batteries:
+            # An empty pool only means "target reached" when no automatic
+            # battery is merely out of comms. A battery that is unreachable or
+            # excluded as non-responsive (e.g. EMS V150 stalls, #623) may still
+            # need charge: hold the slot and re-initialise when it returns.
+            comm_down = [
+                c.name
+                for c in self.coordinators
+                if not getattr(c, CONF_BATTERY_MANUAL_MODE_ENABLED, False)
+                and not c.rs485_user_disabled
+                and (
+                    c.data is None
+                    or not c.is_available
+                    or self._non_responsive.is_excluded(c)
+                )
+            ]
+            if comm_down:
+                _LOGGER.debug(
+                    "Predictive charging held: no battery available, waiting for %s",
+                    ", ".join(comm_down),
+                )
+                self._grid_charging_initialized = False
+                return
             _LOGGER.info(
                 "Predictive charging complete: all batteries reached their active SOC target"
             )
@@ -6970,6 +7139,7 @@ class ChargeDischargeController:
             self._discharge_engage_started[coordinator] = dt_util.utcnow()
             self._non_responsive.clear(coordinator, delivering=False)
             coordinator._low_soc_refusal_started = None
+            coordinator._low_soc_standby_wake_done = False
         # A large step up within the same direction restarts only its engage
         # clock: the battery was following the smaller command and needs time to
         # ramp. The non-responsive episode, the taper clock and the low-SOC
@@ -7349,6 +7519,7 @@ class ChargeDischargeController:
             self._high_soc_taper_started.pop(coordinator, None)
             self._non_responsive.clear(coordinator)
             coordinator._low_soc_refusal_started = None
+            coordinator._low_soc_standby_wake_done = False
             return
         engage_times = (
             self._charge_engage_started
@@ -7425,6 +7596,17 @@ class ChargeDischargeController:
                 )
             else:
                 self._high_soc_taper_started.pop(coordinator, None)
+        # ACK'd but no power: separate a battery sitting in standby
+        # (likely dropped RS485 control) from one that is awake but
+        # still refusing.
+        inv_state = coordinator.data.get("inverter_state") if coordinator.data else None
+        try:
+            is_standby = (
+                inv_state is not None
+                and int(inv_state) == NORMAL_BALANCE_RECAL_INVERTER_STANDBY
+            )
+        except (TypeError, ValueError):
+            is_standby = False
         # Skip non-responsive recording when the BMS is legitimately
         # refusing discharge: either at/near the configured min-SOC, or
         # anywhere below the low-SOC protective floor where the BMS may
@@ -7442,6 +7624,18 @@ class ChargeDischargeController:
             )
             # Comms and battery are fine, just protecting itself.
             self._non_responsive.clear(coordinator)
+            # A battery parked in Standby may instead be stuck (a short AC
+            # interruption leaves it there with RS485 still reading enabled,
+            # #720), which looks the same as a cutoff. Give it the one-shot
+            # standby wake once per refusal episode before judging it empty:
+            # a real cutoff costs one reconnect, a stuck one is recovered.
+            if is_standby and not getattr(
+                coordinator, "_low_soc_standby_wake_done", False
+            ):
+                coordinator._low_soc_standby_wake_done = True
+                coordinator._low_soc_refusal_started = dt_util.utcnow()
+                await self._attempt_wake(coordinator, is_standby=True)
+                return
             # Not a fault, but not a battery to keep asking either: a device
             # that stops above min_soc (its own cutoff set higher in the app, a
             # BMS stopping early) was otherwise commanded for hours while the
@@ -7465,17 +7659,6 @@ class ChargeDischargeController:
                     current_soc + DISCHARGE_MIN_SOC_REENTRY_MARGIN,
                 )
             return
-        # ACK'd but no power: separate a battery sitting in standby
-        # (likely dropped RS485 control) from one that is awake but
-        # still refusing.
-        inv_state = coordinator.data.get("inverter_state") if coordinator.data else None
-        try:
-            is_standby = (
-                inv_state is not None
-                and int(inv_state) == NORMAL_BALANCE_RECAL_INVERTER_STANDBY
-            )
-        except (TypeError, ValueError):
-            is_standby = False
         # Reaching the top voltage during the previous charge is not an exemption
         # here. The discharge engage grace above covers the legitimate transition
         # out of BMS-full standby; once it expires, a battery that still ACKs the
@@ -8015,9 +8198,9 @@ class ChargeDischargeController:
         # Event-driven rate limit: drop a consumption-sensor trigger that lands
         # within _min_cycle_interval_s of the last cycle, so a fast-publishing
         # meter can't flood slow Modbus bridges (e.g. Elfin EW11) with write
-        # bursts. The periodic safety timer (now is a datetime) is never gated:
-        # it keeps the time-based subsystems running and forces a recalc within
-        # its own period. 0 = disabled.
+        # bursts. The periodic safety timer (now is a datetime) always runs, to
+        # keep the time-based subsystems going; inside this window it only keeps
+        # the last command (see _timer_tick_paced). 0 = disabled.
         if now is None and self._min_cycle_interval_s > 0:
             elapsed = time.monotonic() - self._last_cycle_monotonic
             if elapsed < self._min_cycle_interval_s:
@@ -8033,6 +8216,21 @@ class ChargeDischargeController:
             return
         async with self._control_lock:
             previous_cycle_monotonic = self._last_cycle_monotonic
+            # Safety-timer pacing (#654): a tick inside the user's pacing window
+            # (No-PD Command Delay, else PD Min Cycle Interval) still runs the
+            # structural/safety review, but keeps the last command instead of
+            # acting on a fresh meter sample. Otherwise a fast meter turns the
+            # 2 s timer into a command every tick, defeating both settings.
+            pace_s = (
+                self._no_pd_command_delay
+                if self.no_pd_mode_enabled and self._no_pd_command_delay > 0
+                else self._min_cycle_interval_s
+            )
+            self._timer_tick_paced = (
+                now is not None
+                and pace_s > 0
+                and time.monotonic() - previous_cycle_monotonic < pace_s
+            )
             self._last_cycle_monotonic = time.monotonic()
             self._cycle_kept_last_command = False
             await self._run_control_cycle(now)
@@ -8079,9 +8277,21 @@ class ChargeDischargeController:
 
     async def _run_no_pd_debounced_cycle(self):
         """Run the deferred no-PD control cycle."""
+        # #654: a safety-timer tick may have acted since this run was armed.
+        # Wait out the rest of its window so commands stay spaced by the delay.
+        remaining = self._no_pd_command_delay - (
+            time.monotonic() - self._last_cycle_monotonic
+        )
+        if remaining > 0.01:  # tolerance: the re-armed timer fires at ~0 remaining
+            if self._no_pd_debounce_unsub is None:
+                self._no_pd_debounce_unsub = async_call_later(
+                    self.hass, remaining, self._fire_no_pd_debounced_run
+                )
+            return
         if self._control_lock.locked():
             return
         async with self._control_lock:
+            self._timer_tick_paced = False
             self._last_cycle_monotonic = time.monotonic()
             await self._run_control_cycle()
 
@@ -9429,6 +9639,7 @@ class ChargeDischargeController:
         self._consumption_sensor_issue = None
 
         # Detect real sensor publications, even when the numeric value is unchanged.
+        previous_report_time = self._last_sensor_report_time
         sensor_report_time, sensor_elapsed_s, is_stale = (
             self._track_sensor_report(consumption_state, sensor_raw)
         )
@@ -9464,7 +9675,8 @@ class ChargeDischargeController:
         else:
             self._stale_cycles = 0
 
-        if not self.first_execution and not has_new_control_sample:
+        paced_tick = has_new_control_sample and getattr(self, "_timer_tick_paced", False)
+        if not self.first_execution and (not has_new_control_sample or paced_tick):
             # last_reported may advance on an identical P1 publication. That is
             # fresh health data, but it is not a new feedback sample for the
             # incremental P/D law. Structural checks above have already run; keep
@@ -9487,10 +9699,21 @@ class ChargeDischargeController:
                         f"{self._max_sensor_stale_s:.1f}s" if sensor_age_s is not None else "unknown age",
                         self.previous_power,
                     )
+                if paced_tick:
+                    # Leave the sample unconsumed so the next unpaced cycle
+                    # still sees it as new and acts on it, with its elapsed
+                    # measured from the last consumed report (not 0, which
+                    # would freeze the EMA on the old value).
+                    self._last_control_sample_value = None
+                    self._last_sensor_report_time = previous_report_time
                 self._cycle_kept_last_command = True
                 return
-            stale_safety_recalc = True
-            if capacity_protection_must_recheck:
+            # A paced tick that a safety condition needs reviewed runs a normal
+            # cycle on its fresh sample: protections never wait for pacing.
+            stale_safety_recalc = not paced_tick
+            if paced_tick:
+                pass
+            elif capacity_protection_must_recheck:
                 _LOGGER.debug(
                     "ChargeDischargeController: No new control sample but peak shaving is SOC-limited; reviewing discharge %.1fW",
                     self.previous_power,

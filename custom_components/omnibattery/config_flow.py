@@ -104,6 +104,7 @@ from .const import (
     CONF_RS485_GATEWAY,
     CONF_INDEVOLT_REQUEST_SPEED,
     DEFAULT_VERSION,
+    REGISTER_MAP,
     MAX_POWER_BY_VERSION,
     max_power_for_battery_version,
     MAX_BATTERIES,
@@ -126,8 +127,10 @@ from .const import (
     PRICE_INTEGRATION_CKW,
     PRICE_INTEGRATION_EPEX,
     PRICE_INTEGRATION_ENTSOE,
+    PRICE_INTEGRATION_ENERGYZERO,
     PRICE_INTEGRATION_TIBBER,
     PRICE_INTEGRATION_ZONNEPLAN,
+    PRICE_INTEGRATION_FRANK_ENERGIE,
     CONF_METER_INVERTED,
     CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
     DEFAULT_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
@@ -146,6 +149,7 @@ from .const import (
     DEFAULT_SLOT_SOC_MAX_CEILING,
     MAX_TIME_SLOTS,
 )
+from .drivers.base import DriverCapabilities
 from .drivers.esphome import EsphomeEntityDriver
 from .drivers.marstek import MarstekModbusDriver
 from .drivers.zendure import (
@@ -167,7 +171,12 @@ from .drivers.hoymiles import (
     hoymiles_model_profile,
 )
 from .pricing.nordpool import is_official_nordpool_sensor
-from .pricing.calculations import parse_zonneplan_prices
+from .pricing.calculations import parse_frank_energie_prices, parse_zonneplan_prices
+from .pricing.energyzero import (
+    ENERGYZERO_DOMAIN,
+    ENERGYZERO_GET_PRICES_SERVICE,
+    is_energyzero_sensor,
+)
 
 _ANKER_MAX_POWER_W = 3500
 _SESSY_MAX_CHARGE_POWER_W = 2200
@@ -212,8 +221,10 @@ def _price_integration_options() -> list[str]:
         PRICE_INTEGRATION_CKW,
         PRICE_INTEGRATION_EPEX,
         PRICE_INTEGRATION_ENTSOE,
+        PRICE_INTEGRATION_ENERGYZERO,
         PRICE_INTEGRATION_TIBBER,
         PRICE_INTEGRATION_ZONNEPLAN,
+        PRICE_INTEGRATION_FRANK_ENERGIE,
     ]
 
 
@@ -281,6 +292,12 @@ def _validate_price_sensor(
         return None
     if integration_type == PRICE_INTEGRATION_ZONNEPLAN:
         return None if parse_zonneplan_prices(attrs) else "no_price_data"
+    if integration_type == PRICE_INTEGRATION_FRANK_ENERGIE:
+        return None if parse_frank_energie_prices(attrs) else "no_price_data"
+    if integration_type == PRICE_INTEGRATION_ENERGYZERO:
+        if not hass.services.has_service(ENERGYZERO_DOMAIN, ENERGYZERO_GET_PRICES_SERVICE):
+            return "energyzero_unavailable"
+        return None if is_energyzero_sensor(hass, price_sensor) else "no_price_data"
     # Nordpool
     if "raw_today" in attrs:
         return None
@@ -544,8 +561,11 @@ def _phase_assignment_is_valid(value: Any) -> bool:
     return value in PHASE_VALUES or value == PHASE_UNASSIGNED or value in (None, "")
 
 
-def _soc_selector_limits(brand: str) -> tuple[int, int, int, int, int, int]:
+def _soc_selector_limits(
+    brand: str, battery_version: str = DEFAULT_VERSION
+) -> tuple[int, int, int, int, int, int]:
     """Return minimum and maximum SOC selector bounds and defaults."""
+    max_lo = 80
     if brand == "zendure":
         min_lo, min_hi, min_default = 5, 50, 12
     elif brand == "anker":
@@ -566,10 +586,16 @@ def _soc_selector_limits(brand: str) -> tuple[int, int, int, int, int, int]:
         min_lo, min_hi, min_default = 0, 30, 10
     else:
         min_lo, min_hi, min_default = 12, 30, 12
+        # v3/vA/vD enforce this in software, so the 30 % of the v2 register
+        # doesn't apply. The form offers what the SOC limit entities offer:
+        # otherwise saving it moves a value set on those entities.
+        if brand == "marstek" and REGISTER_MAP.get(battery_version, {}).get("discharging_cutoff_capacity") is None:
+            min_hi = int(DriverCapabilities.discharge_cutoff_range[1])
+            max_lo = int(DriverCapabilities.charge_cutoff_range[0])
 
     # Omnibattery enforces the charge ceiling in software. Sessy's reported SOC
     # spans 0–100 %, so the standard 100 % ceiling is valid for this driver.
-    return min_lo, min_hi, min_default, 80, 100, 100
+    return min_lo, min_hi, min_default, max_lo, 100, 100
 
 
 def _indevolt_connection_schema(defaults: dict, battery_num: int) -> vol.Schema:
@@ -2315,7 +2341,7 @@ class MarstekVenusConfigFlow(LegacyDomainMigrationMixin, ConfigFlow, domain=DOMA
             soc_max_lo,
             soc_max_hi,
             soc_max_default,
-        ) = _soc_selector_limits(brand)
+        ) = _soc_selector_limits(brand, self._current_battery_data.get(CONF_BATTERY_VERSION, DEFAULT_VERSION))
 
         if user_input is not None:
             phase = user_input.get(CONF_BATTERY_PHASE, "")
@@ -5034,7 +5060,7 @@ class OptionsFlowHandler(OptionsFlow):
                 soc_max_lo,
                 soc_max_hi,
                 soc_max_default,
-            ) = _soc_selector_limits(brand)
+            ) = _soc_selector_limits(brand, self._current_battery_data.get(CONF_BATTERY_VERSION, DEFAULT_VERSION))
             current_batteries = self.config_entry.data.get("batteries", [])
 
             if user_input is not None:

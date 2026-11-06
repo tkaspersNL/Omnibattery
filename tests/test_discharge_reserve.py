@@ -6,7 +6,7 @@ No Home Assistant and no Modbus: the manager talks to a stand-in controller
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -28,6 +28,7 @@ from custom_components.omnibattery.control.discharge_reserve import (
 )
 from custom_components.omnibattery.pricing import PriceSlot
 from custom_components.omnibattery.pricing.discharge_reserve import STATUS_DISABLED
+from custom_components.omnibattery.solar_forecast import SolarForecastPeriod
 
 DAY = datetime(2026, 9, 4)
 NOW = DAY + timedelta(hours=13)
@@ -491,6 +492,300 @@ def test_the_evening_peak_does_not_release_the_reserve_after_midnight():
     )
 
 
+NOV_2 = datetime(2026, 11, 2)
+NOV_2_SUNRISE = NOV_2 + timedelta(hours=7, minutes=15, seconds=28)
+NOV_3_SUNRISE = NOV_2 + timedelta(days=1, hours=7, minutes=17, seconds=1)
+SUN_TAKES_OVER = NOV_2 + timedelta(hours=10)
+QUARTER = timedelta(minutes=15)
+LOAD_PER_QUARTER = 0.25
+
+
+def _nov_2_pricing(
+    forecast_kwh: float = 13.6,
+    now: datetime = NOV_2 + timedelta(minutes=5),
+    load=None,
+):
+    """2 Nov: dear from 05:45, still dear long after sunrise, sun from 10:00.
+
+    Weak sun from 07:15 to 10:00 (5 % of the day) that never covers the house,
+    then strong sun to 16:00. The slot filter is the real one: a slot that
+    starts on the horizon stays in, which is how the sunrise slot got the day's
+    whole forecast.
+    """
+
+    def price(hour: float) -> float:
+        if 5.75 <= hour < 10.0:
+            return 0.60
+        if 17.0 <= hour < 20.0:
+            return 0.55
+        return 0.45 if 10.0 <= hour < 17.0 else 0.47
+
+    slots = [
+        PriceSlot(NOV_2 + QUARTER * i, NOV_2 + QUARTER * (i + 1), price(i / 4.0))
+        for i in range(96)
+    ]
+    intervals = [LOAD_PER_QUARTER] * 96
+    for index, kwh in (load or {}).items():
+        intervals[index] = kwh
+    profile = SimpleNamespace(
+        intervals_kwh=intervals,
+        intervals_by_date={NOV_2.date(): intervals},
+        energy_kwh=sum(intervals),
+        source="profile",
+    )
+
+    def fraction(hour: float) -> float:
+        if hour <= 7.25:
+            return 0.0
+        if hour <= 10.0:
+            return 0.05 * (hour - 7.25) / 2.75
+        return min(1.0, 0.05 + 0.95 * (hour - 10.0) / 6.0)
+
+    return _pricing(
+        get_future_price_slots=lambda horizon_end=None: [
+            slot
+            for slot in slots
+            if slot.end > now and (horizon_end is None or slot.start <= horizon_end)
+        ],
+        _profile_remaining_consumption=lambda start, end: profile,
+        _curtailment_forecast_model=lambda _now: (forecast_kwh, fraction, None),
+        _solar_forecast_is_remaining=lambda: True,
+        _get_current_price=lambda: 0.47,
+        energy_horizon_end=lambda when: (
+            NOV_3_SUNRISE if when.date() == NOV_2.date() else NOV_2_SUNRISE
+        ),
+    )
+
+
+def _nov_2_manager(now: datetime = NOV_2 + timedelta(minutes=5), **pricing_kwargs):
+    controller = _controller(
+        _pricing_mgr=_nov_2_pricing(now=now, **pricing_kwargs),
+        discharge_reserve_min_saving=0.029,
+    )
+    return _built(controller, now)
+
+
+def test_the_reserve_holds_on_until_the_sun_covers_the_house():
+    """2 Nov: empty at 07:15, then 2.70 kWh imported at 0.586 by 09:10."""
+    manager = _nov_2_manager()
+
+    # 1.5 kWh before sunrise plus 11 quarters at 0.25 kWh less the weak sun.
+    weak_sun = 13.6 * 0.05 / 11
+    expected_kwh = 6 * LOAD_PER_QUARTER + 11 * (LOAD_PER_QUARTER - weak_sun)
+    assert manager.reserve_soc_pct() == pytest.approx(10 * expected_kwh, rel=1e-3)
+    status = manager.get_status()
+    assert status["horizon_end"] == SUN_TAKES_OVER.isoformat()
+    assert status["pv_credit_kwh"] == 0.0
+    starts = [slot["start"] for slot in status["reserved_slots"]]
+    assert (NOV_2 + timedelta(hours=9, minutes=45)).isoformat() in starts
+    assert SUN_TAKES_OVER.isoformat() not in starts
+
+
+def test_the_sunrise_slot_does_not_receive_the_whole_day_s_sun():
+    """It lost its claim when the forecast was spread over the night's slots."""
+    manager = _nov_2_manager()
+    manager.reserve_soc_pct()
+    starts = [slot["start"] for slot in manager.get_status()["reserved_slots"]]
+    assert (NOV_2 + timedelta(hours=7, minutes=15)).isoformat() in starts
+    assert manager.plan.horizon_surplus_kwh == pytest.approx(0.0)
+
+
+def test_one_quiet_quarter_hour_is_not_the_sun_taking_over():
+    """A learned profile dips for 15 minutes; the house is back on the grid after."""
+    # 08:30: the weak sun beats this one slot, but not the hour that starts there.
+    manager = _nov_2_manager(load={34: 0.01})
+    manager.reserve_soc_pct()
+    assert manager.get_status()["horizon_end"] == SUN_TAKES_OVER.isoformat()
+
+
+def test_a_day_the_sun_never_covers_the_house_holds_for_the_evening():
+    """Nothing refills the battery, so the evening's hours are still its problem."""
+    manager = _nov_2_manager(forecast_kwh=2.0)
+    manager.reserve_soc_pct()
+    status = manager.get_status()
+    assert status["horizon_end"] == NOV_3_SUNRISE.isoformat()
+    assert status["pv_credit_kwh"] == 0.0
+    starts = [slot["start"] for slot in status["reserved_slots"]]
+    assert (NOV_2 + timedelta(hours=18)).isoformat() in starts
+
+
+def test_no_solar_forecast_keeps_the_horizon_on_sunrise():
+    """Not knowing the sun is no reason to hold the night's energy for the evening."""
+    manager = _nov_2_manager(forecast_kwh=0.0)
+    manager.reserve_soc_pct()
+    assert manager.get_status()["horizon_end"] == NOV_2_SUNRISE.isoformat()
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        SUN_TAKES_OVER,  # the sun covers the house from this slot on
+        SUN_TAKES_OVER + timedelta(hours=1),  # still before the solar midpoint
+        NOV_2 + timedelta(hours=14),  # past it, with sun still ahead
+        NOV_2 + timedelta(hours=23, minutes=30),  # the evening before the next night
+    ],
+)
+def test_once_the_sun_has_taken_over_the_horizon_is_tomorrow_s_sunrise(now):
+    manager = _nov_2_manager(now=now)
+    assert manager.plan.horizon_end == NOV_3_SUNRISE
+
+
+def test_a_later_uncovered_slot_does_not_pull_the_horizon_back_in():
+    """Once the sun has covered the house today, a forecast dip must not flip back."""
+    manager = _nov_2_manager(now=SUN_TAKES_OVER)
+    assert manager.plan.horizon_end == NOV_3_SUNRISE
+
+    later = SUN_TAKES_OVER + timedelta(minutes=20)
+    # The refreshed profile now says 10:15 and 10:30 outrun the sun.
+    manager._controller._pricing_mgr = _nov_2_pricing(
+        now=later, load={41: 2.0, 42: 2.0}
+    )
+    manager._now = lambda: later
+    asyncio.get_event_loop().run_until_complete(
+        manager.async_rebuild_plan("test", force=True)
+    )
+    assert manager.plan.horizon_end == NOV_3_SUNRISE
+
+
+# ----------------------------------------------------------------------
+# The provider's solar curve
+# ----------------------------------------------------------------------
+
+
+def _hourly(day: datetime, first: int, last: int) -> list[PriceSlot]:
+    return [
+        PriceSlot(day + timedelta(hours=hour), day + timedelta(hours=hour + 1), 0.3)
+        for hour in range(first, last)
+    ]
+
+
+def _periods(day: datetime, energy_by_hour: dict[int, float]):
+    """Provider periods in UTC, the zone the curve manager below runs in."""
+    return tuple(
+        SolarForecastPeriod(
+            (day + timedelta(hours=hour)).replace(tzinfo=timezone.utc),
+            (day + timedelta(hours=hour + 1)).replace(tzinfo=timezone.utc),
+            energy,
+        )
+        for hour, energy in energy_by_hour.items()
+    )
+
+
+def _curve_manager(periods=None, **controller_overrides) -> DischargeReserveManager:
+    controller = _controller(**controller_overrides)
+    if periods is not None:
+        controller.solar_forecast_periods = periods
+    manager = DischargeReserveManager(
+        SimpleNamespace(config=SimpleNamespace(time_zone="UTC")), controller
+    )
+    manager._now = lambda: NOW
+    return manager
+
+
+# The flat-horizon sine: sun from 07:00, an even 1 kWh an hour until noon.
+SINE_MORNING = {slot: 1.0 for slot in _hourly(DAY, 7, 12)}
+
+# The provider: the panels see nothing until 09:00, the mountain's hours.
+MOUNTAIN_MORNING = {7: 0.0, 8: 0.0, 9: 1.0, 10: 2.0, 11: 3.0}
+
+
+def test_the_provider_curve_moves_the_sun_to_when_the_panels_see_it():
+    manager = _curve_manager(_periods(DAY, MOUNTAIN_MORNING))
+    shaped = manager._follow_provider_curve(SINE_MORNING, NOW)
+
+    by_hour = {slot.start.hour: kwh for slot, kwh in shaped.items()}
+    assert by_hour[7] == 0.0
+    assert by_hour[8] == 0.0
+    assert by_hour[9] == pytest.approx(5.0 / 6.0)
+    assert by_hour[11] == pytest.approx(2.5)
+    # The day's energy is the sine's; only its split moved.
+    assert sum(shaped.values()) == pytest.approx(5.0)
+
+
+def test_without_provider_periods_the_sine_stays():
+    manager = _curve_manager()
+    assert manager._follow_provider_curve(SINE_MORNING, NOW) == SINE_MORNING
+
+
+def test_a_day_the_periods_do_not_cover_keeps_the_sine():
+    tomorrow = DAY + timedelta(days=1)
+    solar = {**SINE_MORNING, **{slot: 0.5 for slot in _hourly(tomorrow, 7, 9)}}
+    manager = _curve_manager(_periods(DAY, MOUNTAIN_MORNING))
+    shaped = manager._follow_provider_curve(solar, NOW)
+
+    for slot in _hourly(tomorrow, 7, 9):
+        assert shaped[slot] == 0.5
+    assert shaped[_hourly(DAY, 7, 8)[0]] == 0.0
+
+
+def test_each_day_keeps_its_own_energy():
+    tomorrow = DAY + timedelta(days=1)
+    solar = {**SINE_MORNING, **{slot: 0.5 for slot in _hourly(tomorrow, 7, 9)}}
+    periods = _periods(DAY, MOUNTAIN_MORNING) + _periods(tomorrow, {7: 0.0, 8: 4.0})
+    shaped = _curve_manager(periods)._follow_provider_curve(solar, NOW)
+
+    today = sum(kwh for slot, kwh in shaped.items() if slot.start.date() == DAY.date())
+    assert today == pytest.approx(5.0)
+    assert shaped[_hourly(tomorrow, 7, 8)[0]] == 0.0
+    assert shaped[_hourly(tomorrow, 8, 9)[0]] == pytest.approx(1.0)
+
+
+def test_a_provider_that_leaves_out_its_dark_hours_still_covers_the_day():
+    """Solcast sends no period for an hour without sun."""
+    solar = {
+        **{slot: 0.0 for slot in _hourly(DAY, 0, 7)},
+        **SINE_MORNING,
+    }
+    manager = _curve_manager(_periods(DAY, MOUNTAIN_MORNING))
+    shaped = manager._follow_provider_curve(solar, NOW)
+    assert shaped[_hourly(DAY, 7, 8)[0]] == 0.0
+    assert sum(shaped.values()) == pytest.approx(5.0)
+
+
+def test_a_curve_with_a_hole_in_daylight_is_not_trusted():
+    periods = _periods(DAY, {7: 0.0, 8: 0.0, 11: 3.0})
+    manager = _curve_manager(periods)
+    assert manager._follow_provider_curve(SINE_MORNING, NOW) == SINE_MORNING
+
+
+def test_the_morning_demand_follows_the_provider_curve():
+    """Before the panels see the sun the house still runs on the battery."""
+    slots = _hourly(DAY, 7, 12)
+
+    def fraction(hour: float) -> float:
+        return max(0.0, min(1.0, (hour - 7.0) / 5.0))
+
+    intervals = [0.0] * 96
+    for index in range(28, 48):  # 07:00 - 12:00, 0.5 kWh an hour
+        intervals[index] = 0.125
+    profile = SimpleNamespace(
+        intervals_kwh=intervals,
+        intervals_by_date={DAY.date(): intervals},
+        energy_kwh=sum(intervals),
+        source="profile",
+    )
+    pricing = _pricing(
+        get_future_price_slots=lambda horizon_end=None: slots,
+        _profile_remaining_consumption=lambda start, end: profile,
+        _curtailment_forecast_model=lambda now: (5.0, fraction, None),
+        _solar_forecast_is_remaining=lambda: True,
+    )
+    now = DAY + timedelta(hours=6)
+
+    flat = _curve_manager(_pricing_mgr=pricing)
+    demand, _ = flat._demand_and_surplus_by_slot(pricing, slots, now, None)
+    assert demand[slots[0]] == 0.0
+
+    mountain = _curve_manager(
+        _periods(DAY, MOUNTAIN_MORNING), _pricing_mgr=pricing
+    )
+    demand, surplus = mountain._demand_and_surplus_by_slot(pricing, slots, now, None)
+    assert demand[slots[0]] == pytest.approx(0.5)
+    assert demand[slots[1]] == pytest.approx(0.5)
+    assert surplus[slots[0]] == 0.0
+    assert surplus[slots[4]] > 0.0
+
+
 # ----------------------------------------------------------------------
 # The seam: how the reserve reaches the battery
 # ----------------------------------------------------------------------
@@ -641,6 +936,31 @@ def test_both_batteries_are_held_when_the_fleet_reaches_the_reserve():
     details = registry[("battery-1", "price_reserve")]
     assert details["reserve_soc_pct"] == pytest.approx(20.0)
     assert details["fleet_reserve_soc_pct"] == pytest.approx(20.0)
+
+
+def test_a_battery_on_its_floor_is_not_held_by_the_reserve():
+    """Its share is zero, so min_soc stops it, not the reserve.
+
+    Holding it too showed price_reserve_hold while the other battery still
+    discharged its share.
+    """
+    coordinators = [
+        _coordinator(soc=12.0, min_soc=12.0, capacity=5.12, name="Venus 1"),
+        _coordinator(soc=60.0, min_soc=5.0, capacity=8.16, name="Zendure 1"),
+    ]
+    registry, manager = _fleet_blocks(coordinators, evening_kwh=2.0)
+    assert manager.get_status()["battery_reserve_soc_pct"]["Venus 1"] == 0.0
+    assert ("Venus 1", "price_reserve") not in registry
+    assert registry == {}
+
+
+def test_a_battery_on_its_floor_is_not_held_next_to_one_that_is():
+    coordinators = [
+        _coordinator(soc=12.0, min_soc=12.0, capacity=5.12, name="Venus 1"),
+        _coordinator(soc=30.0, min_soc=5.0, capacity=8.16, name="Zendure 1"),
+    ]
+    registry, _ = _fleet_blocks(coordinators, evening_kwh=50.0)
+    assert set(registry) == {("Zendure 1", "price_reserve")}
 
 
 def test_the_status_shows_each_battery_s_share():
@@ -1063,3 +1383,79 @@ def test_no_charge_capacity_credits_no_surplus():
 
     assert surplus[midday] == pytest.approx(0.0)
     assert surplus[evening] == pytest.approx(0.0)
+
+
+# ----------------------------------------------------------------------
+# The evening sees tomorrow's morning up to the sun
+# ----------------------------------------------------------------------
+
+TOMORROW = DAY + timedelta(days=1)
+TOMORROW_SUNRISE = TOMORROW + timedelta(hours=7)
+EVENING = DAY + timedelta(hours=21)
+
+
+def _evening_pricing(now=EVENING):
+    """21:00 to tomorrow noon, hourly: the night 0.30, tomorrow 07:00 to 09:00
+    dear at 0.55, then 0.30. The house uses 0.5 kWh an hour."""
+    slots = [
+        PriceSlot(
+            now + timedelta(hours=i),
+            now + timedelta(hours=i + 1),
+            0.55 if 7 <= (now + timedelta(hours=i)).hour < 9 and i > 3 else 0.30,
+        )
+        for i in range(15)
+    ]
+    intervals = [0.125] * 96
+    profile = SimpleNamespace(
+        intervals_kwh=intervals,
+        intervals_by_date={DAY.date(): intervals, TOMORROW.date(): intervals},
+        energy_kwh=sum(intervals),
+        source="profile",
+    )
+    return _pricing(
+        get_future_price_slots=lambda horizon_end=None: [
+            slot for slot in slots if horizon_end is None or slot.start <= horizon_end
+        ],
+        _profile_remaining_consumption=lambda start, end: profile,
+        # After sunset a remaining-today sensor reads 0; past the midpoint.
+        _curtailment_forecast_model=lambda _now: (0.0, lambda hour: 1.0, None),
+        _solar_forecast_is_remaining=lambda: True,
+        _get_current_price=lambda: 0.30,
+        energy_horizon_end=lambda _when: TOMORROW_SUNRISE,
+    )
+
+
+def _evening_manager(periods=None):
+    manager = _curve_manager(
+        periods,
+        _pricing_mgr=_evening_pricing(),
+        discharge_reserve_min_saving=0.05,
+        coordinators=[_coordinator(soc=80.0)],
+    )
+    manager._now = lambda: EVENING
+    asyncio.get_event_loop().run_until_complete(manager.async_rebuild_plan("test"))
+    return manager
+
+
+# Tomorrow's provider periods: the sun beats the 0.5 kWh an hour from 09:00.
+TOMORROW_SUN = {7: 0.05, 8: 0.3, 9: 0.8, 10: 1.2, 11: 1.5}
+
+
+def test_the_evening_plan_runs_to_where_the_sun_covers_the_house_tomorrow():
+    """#721, 21:38: the plan ended at sunrise while the house ran on the battery
+    until about 09:00, so the dear slots after sunrise were not kept."""
+    manager = _evening_manager(_periods(TOMORROW, TOMORROW_SUN))
+
+    assert manager.plan.horizon_end == TOMORROW + timedelta(hours=9)
+    manager.reserve_soc_pct()
+    claimed = {slot["start"] for slot in manager.get_status()["claims"]}
+    assert (TOMORROW + timedelta(hours=8)).isoformat() in claimed
+
+
+def test_without_tomorrow_s_periods_the_evening_plan_ends_at_sunrise():
+    assert _evening_manager().plan.horizon_end == TOMORROW_SUNRISE
+
+
+def test_a_morning_the_sun_does_not_cover_by_noon_keeps_sunrise():
+    dull = {hour: 0.1 for hour in range(7, 12)}
+    assert _evening_manager(_periods(TOMORROW, dull)).plan.horizon_end == TOMORROW_SUNRISE

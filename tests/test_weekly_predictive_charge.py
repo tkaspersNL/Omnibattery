@@ -202,9 +202,10 @@ def test_weekly_reserve_survives_a_fully_covering_solar_forecast():
     assert weekly["weekly_reserve_kwh"] > 0
 
 
-def test_weekly_schedule_reserves_only_post_solar_slots(monkeypatch):
-    """The weekly fallback must not arm cheap pre-dawn informational slots (#489)."""
-    now = datetime(2026, 9, 21, 0, 5)
+def _evaluate_with_weekly_reserve(
+    monkeypatch, now, slots, build_plan, reserve=None, **decision_overrides
+):
+    """Run a daily evaluation whose plan publishes a 5 kWh weekly reserve."""
 
     class FixedDateTime(datetime):
         @classmethod
@@ -214,7 +215,7 @@ def test_weekly_schedule_reserves_only_post_solar_slots(monkeypatch):
     monkeypatch.setattr(pricing_engine, "datetime", FixedDateTime)
     monkeypatch.setattr(pricing_engine.calculations, "datetime", FixedDateTime)
     ctrl = _ctrl([_Coord(50.0, 10.0)], weekly=True, solar="8.0")
-    decision = _run(ctrl)
+    decision = {**_run(ctrl), **decision_overrides}
 
     async def should_activate():
         return dict(decision)
@@ -237,12 +238,6 @@ def test_weekly_schedule_reserves_only_post_solar_slots(monkeypatch):
     ctrl.round_trip_efficiency = 1.0
     ctrl.discharge_price_threshold = 1.0
     ctrl._predictive_min_soc_floor_enabled = False
-    pre_dawn = PriceSlot(
-        now.replace(hour=1), now.replace(hour=2), 0.01
-    )
-    post_solar = PriceSlot(
-        now.replace(hour=19), now.replace(hour=20), 0.02
-    )
     manager = PricingManager(SimpleNamespace(), ctrl)
     manager._mark_surplus_hold_stale = lambda _reason: None
     manager._mark_discharge_reserve_stale = lambda _reason: None
@@ -251,7 +246,7 @@ def test_weekly_schedule_reserves_only_post_solar_slots(monkeypatch):
     manager._maybe_refresh_service_prices = no_op
     manager._refresh_excluded_demand_reference = lambda: None
     manager._refresh_solar_forecast_reference = lambda _now: None
-    manager._parse_price_data = lambda **_kwargs: [pre_dawn, post_solar]
+    manager._parse_price_data = lambda **_kwargs: list(slots)
     manager._negative_price_feature_enabled = lambda: False
     manager._build_curtailment_plan = lambda *_args, **_kwargs: SimpleNamespace(
         risk_slots=[]
@@ -261,10 +256,13 @@ def test_weekly_schedule_reserves_only_post_solar_slots(monkeypatch):
 
     def publish_weekly_reserve(**kwargs):
         kwargs["decision_data"].update(
-            weekly_reserve_kwh=5.0,
-            weekly_reserve_not_before=now.replace(hour=18).isoformat(),
+            reserve
+            or dict(
+                weekly_reserve_kwh=5.0,
+                weekly_reserve_not_before=now.replace(hour=18).isoformat(),
+            )
         )
-        return None
+        return build_plan(kwargs["decision_data"])
 
     manager._build_chronological_plan = publish_weekly_reserve
 
@@ -272,6 +270,21 @@ def test_weekly_schedule_reserves_only_post_solar_slots(monkeypatch):
         manager._evaluate_dynamic_pricing(
             horizon=DynamicPricingEvaluationHorizon.DAILY
         )
+    )
+    return ctrl
+
+
+def test_weekly_schedule_reserves_only_post_solar_slots(monkeypatch):
+    """The weekly fallback must not arm cheap pre-dawn informational slots (#489)."""
+    now = datetime(2026, 9, 21, 0, 5)
+    pre_dawn = PriceSlot(
+        now.replace(hour=1), now.replace(hour=2), 0.01
+    )
+    post_solar = PriceSlot(
+        now.replace(hour=19), now.replace(hour=20), 0.02
+    )
+    ctrl = _evaluate_with_weekly_reserve(
+        monkeypatch, now, [pre_dawn, post_solar], lambda _decision: None
     )
 
     schedule = ctrl._dynamic_pricing_schedule
@@ -391,3 +404,135 @@ def test_evening_weekly_fallback_sizes_the_deficit_to_full_soc(monkeypatch):
     schedule = ctrl._dynamic_pricing_schedule
     assert schedule.energy_deficit_kwh == pytest.approx(3.8)
     assert schedule.energy_deficit_kwh > (coord.max_soc - 62.0) / 100.0 * 10.0
+
+
+def test_weekly_slots_after_the_plan_count_in_the_estimated_cost(monkeypatch):
+    """Weekly slots carry no planned kWh but do charge: cost them (#715)."""
+    from custom_components.omnibattery.const import CHARGE_EFFICIENCY
+    from custom_components.omnibattery.pricing.chronological import (
+        ChronologicalPlan,
+        SlotAllocation,
+    )
+
+    now = datetime(2026, 9, 21, 0, 5)
+    planned = PriceSlot(now.replace(hour=2), now.replace(hour=3), 0.10)
+    weekly = [
+        PriceSlot(now.replace(hour=h), now.replace(hour=h + 1), 0.20)
+        for h in (19, 20)
+    ]
+
+    def plan(decision):
+        decision.update(should_charge=True, energy_deficit_kwh=2.0)
+        return ChronologicalPlan(
+            allocations=[SlotAllocation(planned, 2.0, None, "flexible")],
+            total_required_kwh=2.0,
+            flexible_required_kwh=2.0,
+        )
+
+    ctrl = _evaluate_with_weekly_reserve(
+        monkeypatch, now, [planned, *weekly], plan, should_charge=True
+    )
+
+    schedule = ctrl._dynamic_pricing_schedule
+    # 5 kW x 1 h x efficiency fills the first weekly slot; the rest of the
+    # 5 kWh reserve lands in the second.
+    first = 5.0 * CHARGE_EFFICIENCY
+    battery_kwh = {planned: 2.0, weekly[0]: first, weekly[1]: 5.0 - first}
+    assert schedule.slot_cost_energy_kwh == pytest.approx(battery_kwh)
+    battery_cost = sum(slot.price * kwh for slot, kwh in battery_kwh.items())
+    assert schedule.estimated_cost == pytest.approx(battery_cost / CHARGE_EFFICIENCY)
+    assert schedule.average_price == pytest.approx(battery_cost / 7.0)
+
+
+# ----------------------------------------------------------------------
+# The night after the target day
+# ----------------------------------------------------------------------
+
+
+def _night_window_mgr(target_day_start, sunrise_h=7.5):
+    """A weekly manager on its target day, with the run ending at the next sunrise."""
+    sunrise = target_day_start + timedelta(days=1, hours=sunrise_h)
+    return SimpleNamespace(
+        is_active=lambda: True,
+        window_end=lambda now: sunrise,
+        in_overnight_extension=lambda now: target_day_start + timedelta(days=1) <= now < sunrise,
+    )
+
+
+def test_the_gap_is_bought_in_the_cheap_night_not_after_sunrise(monkeypatch):
+    """After the sun the night is the cheap part; a slot past the sunrise that
+    ends the run would charge after it."""
+    now = datetime(2026, 9, 21, 14, 0)
+    evening = PriceSlot(now.replace(hour=19), now.replace(hour=20), 0.30)
+    night = PriceSlot(now + timedelta(hours=13), now + timedelta(hours=14), 0.10)
+    morning = PriceSlot(now + timedelta(hours=19), now + timedelta(hours=20), 0.05)
+    ctrl = _evaluate_with_weekly_reserve(
+        monkeypatch,
+        now,
+        [evening, night, morning],
+        lambda _decision: None,
+        reserve=dict(
+            weekly_reserve_kwh=5.0,
+            weekly_reserve_not_before=now.replace(hour=18).isoformat(),
+            weekly_reserve_not_after=(now + timedelta(hours=17, minutes=30)).isoformat(),
+        ),
+    )
+
+    starts = {slot.start for slot in ctrl._dynamic_pricing_schedule.selected_slots}
+    assert night.start in starts
+    assert morning.start not in starts
+
+
+def test_in_the_night_after_the_target_day_the_gap_is_reserved_from_now():
+    target_day = datetime(2026, 9, 21)
+    now = target_day + timedelta(days=1, hours=2)
+    coord = _Coord(60.0, 10.0)
+    ctrl = _ctrl([coord], weekly=True, solar=None, consumption=2.0)
+    decision = _run(ctrl)
+    forecast = SimpleNamespace(
+        energy_kwh=2.0,
+        intervals_kwh=[2.0 / 96] * 96,
+        intervals_by_date={},
+        source="profile",
+        coverage_ratio=1.0,
+        total_days=7,
+    )
+    ctrl._consumption_tracker = SimpleNamespace(
+        consumption_profile=object(),
+        solar_profile=None,
+        get_dynamic_base_consumption=_consumption(2.0),
+        forecast_consumption_between=lambda *_args, **_kwargs: forecast,
+        calculate_sunrise=lambda *_args: 7.5,
+        calculate_solar_noon=lambda: 13.0,
+    )
+    ctrl.solar_profile_mode = "off"
+    ctrl._is_battery_manual_owned = lambda _coord: False
+    ctrl._weekly_charge_mgr = _night_window_mgr(target_day)
+    ctrl._charge_ceiling_soc = lambda battery: (
+        ChargeDischargeController._charge_ceiling_soc(ctrl, battery)
+    )
+    ctrl._weekly_full_charge_pending = lambda: (
+        ChargeDischargeController._weekly_full_charge_pending(ctrl)
+    )
+    ctrl._predictive_min_soc_floor_enabled = False
+    ctrl.config_entry = SimpleNamespace(data={})
+    ctrl.max_contracted_power = 5000
+    ctrl.max_charge_capacity = 5000
+    ctrl._last_chronological_diagnostics = None
+    manager = PricingManager(SimpleNamespace(config=SimpleNamespace(time_zone="UTC")), ctrl)
+    manager.energy_horizon_end = lambda _now: target_day + timedelta(days=1, hours=7, minutes=30)
+
+    manager._build_chronological_plan(
+        now=now,
+        slots=[],
+        decision_data=decision,
+        price_ceiling=None,
+        diagnostic_only=True,
+    )
+
+    assert decision["weekly_reserve_not_before"] == now.isoformat()
+    assert decision["weekly_reserve_not_after"] == (
+        target_day + timedelta(days=1, hours=7, minutes=30)
+    ).isoformat()
+    # 4 kWh to 100 % plus what the house draws until sunrise.
+    assert decision["weekly_reserve_kwh"] >= 4.0

@@ -499,6 +499,19 @@ DISCHARGE_ENGAGE_GRACE_S = 30
 # restarts the grace, so a battery that stalls under that cycle is still caught.
 ENGAGE_GRACE_STEP_FACTOR = 2
 
+# PD Quality only updates while the PD controls the grid. A gap longer than
+# PD_QUALITY_RESTART_GAP_S between two updates means the PD was not in control
+# meanwhile (a grid-charge slot, the weekly full charge, manual mode, a long
+# block). Its numbers then describe the situation before the gap, and when the
+# PD takes over the batteries are still running the previous command. So the
+# metric starts over: it skips the first PD_QUALITY_RESTART_SETTLE_S, the time
+# a battery gets to engage after a direction switch, and then averages one
+# metric window of fresh readings before the sensor shows a verdict again. The
+# gap is two 60s metric windows, well above the slowest supported meter
+# (MAX_SENSOR_STALE_S), which keeps updating the metric on every reading.
+PD_QUALITY_RESTART_GAP_S = 120.0
+PD_QUALITY_RESTART_SETTLE_S = float(DISCHARGE_ENGAGE_GRACE_S)
+
 # Top-of-charge tail: the last stretch before 100% often tapers hard (CC/CV
 # tail current) well before is_battery_full() reports the battery full or
 # tick_bms_cutoff() confirms a cutoff (which needs power <= 10 W *and*
@@ -718,8 +731,8 @@ RELAY_COOLDOWN_HOLD_POWER = 100
 # Minimum spacing (s) between event-driven control cycles. The grid sensor can
 # publish several times per second; without a floor, each out-of-deadband cycle
 # issues a Modbus write burst, which slow TCP-serial bridges (e.g. Elfin EW11)
-# can choke on. Drops surplus sensor-triggered cycles; the 2 s safety timer is
-# never gated. 0 = disabled (pre-feature behaviour); default 1 s caps bursts.
+# can choke on. Drops surplus sensor-triggered cycles; 2 s safety-timer ticks
+# inside the window keep the last command (#654). 0 = disabled (pre-feature behaviour); default 1 s caps bursts.
 DEFAULT_PD_MIN_CYCLE_INTERVAL = 1.0
 # Grid-sample EMA smoothing time constant (s). Single source of truth so no-PD
 # mode can drop it to 0 (raw passthrough) and restore it when the mode is off.
@@ -956,7 +969,7 @@ CONF_DISCHARGE_PRICE_THRESHOLD = "discharge_price_threshold"
 CONF_MAX_PRICE_THRESHOLD_ENABLED = "max_price_threshold_enabled"
 CONF_DISCHARGE_PRICE_THRESHOLD_ENABLED = "discharge_price_threshold_enabled"
 # Minimum arbitrage margin (currency/kWh) required before a slot is eligible for
-# grid charging. Unset (None) → disabled, and slot selection behaves exactly as
+# grid charging, valued against the slots that follow it only. Unset (None) → disabled, and slot selection behaves exactly as
 # before. When set, a candidate slot must satisfy
 #   expected_discharge_price * round_trip_efficiency - slot_price >= margin
 # so that charging is skipped on days where the intraday spread cannot repay the
@@ -1076,12 +1089,15 @@ PRICE_INTEGRATION_PVPC = "pvpc"
 PRICE_INTEGRATION_CKW = "ckw"
 PRICE_INTEGRATION_EPEX = "epex"
 PRICE_INTEGRATION_ENTSOE = "entsoe"
+PRICE_INTEGRATION_ENERGYZERO = "energyzero"
 PRICE_INTEGRATION_TIBBER = "tibber"
 PRICE_INTEGRATION_ZONNEPLAN = "zonneplan"
+PRICE_INTEGRATION_FRANK_ENERGIE = "frank_energie"
 
 # Tibber and the official Nord Pool integration are service-based rather than
 # forecast-attribute based. How stale either cache may get before a refresh.
 TIBBER_REFRESH_MINUTES = 60
+ENERGYZERO_REFRESH_MINUTES = 60
 NORDPOOL_REFRESH_MINUTES = 60
 
 # Marker for CONFIG_NUMBER_DEFINITIONS entries whose slider bounds are derived
@@ -1173,7 +1189,7 @@ CONFIG_NUMBER_DEFINITIONS = [
         "key": CONF_PD_MIN_CYCLE_INTERVAL,
         "name": "PD Min Cycle Interval",
         "min": 0,
-        "max": 2,
+        "max": 5,
         "step": 0.1,
         "unit": "s",
         "default": DEFAULT_PD_MIN_CYCLE_INTERVAL,
